@@ -1,0 +1,11 @@
+{
+  "sites": {
+    "henry-coe": {
+      "name": "Henry W. Coe State Park",
+      "latitude": 37.1858,
+      "longitude": -121.5483,
+      "elevation_m": 793.0,
+      "ridge_height_m": 1000.0
+    }
+  }
+}
