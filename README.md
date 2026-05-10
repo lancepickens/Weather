@@ -40,8 +40,26 @@ python3 cloud_height_predictor.py --help
 `ridge_height_m` is optional; omit it for sites without a meaningful
 local ridge.
 
+## GraphCast long-range cloud forecast
+
+`graphcast_cloud_forecast.py` pulls a multi-day cloud cover forecast
+for any site in `sites.json` from DeepMind's GraphCast model served via
+the Open-Meteo API. By default it prints daily means (total + low/mid/
+high) over the full 10-day GraphCast horizon; pass `--hourly` for the
+raw hourly series. It runs alongside `cloud_height_predictor.py` and
+shares the same `sites.json` config.
+
+```sh
+python3 graphcast_cloud_forecast.py --list-sites
+python3 graphcast_cloud_forecast.py --site henry-coe
+python3 graphcast_cloud_forecast.py --site henry-coe --days 7
+python3 graphcast_cloud_forecast.py --site henry-coe --hourly
+python3 graphcast_cloud_forecast.py --help
+```
+
 ### Tests (no network required)
 
 ```sh
 python3 tests/test_cloud_height_predictor.py
+python3 tests/test_graphcast_cloud_forecast.py
 ```
