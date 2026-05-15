@@ -5,7 +5,7 @@ import json
 import os
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
@@ -14,10 +14,12 @@ from cloud_height_predictor import (  # noqa: E402
     CloudHeightForecast,
     Site,
     _build_forecast,
+    _site_timezone,
     cloud_base_height_msl_m,
     format_forecast,
     format_site_list,
     is_below_ridge,
+    is_extinction,
     lifted_condensation_level_m,
     load_sites,
     main,
@@ -71,6 +73,22 @@ def test_below_ridge_flag_above_ridge():
     assert is_below_ridge(f, HENRY_COE) is False
 
 
+def test_extinction_when_cloud_base_at_site_elevation():
+    # Saturated air → AGL = 0, MSL == elevation → observer is in cloud.
+    f = _forecast(12.0, 12.0)
+    assert is_extinction(f, HENRY_COE) is True
+
+
+def test_no_extinction_when_cloud_base_above_site():
+    f = _forecast(20.0, 10.0)  # AGL = 1250
+    assert is_extinction(f, HENRY_COE) is False
+
+
+def test_format_forecast_flags_extinction_note():
+    out = format_forecast([_forecast(10.0, 10.0)], HENRY_COE)
+    assert "extinction" in out
+
+
 def test_is_below_ridge_returns_false_when_ridge_unset():
     flat_site = Site(
         id="flat",
@@ -99,6 +117,57 @@ def test_build_forecast_from_hourly_payload():
     assert f0.cloud_base_height_agl_m == 1250.0
     assert f1.cloud_base_height_agl_m == 1000.0
     assert f0.time == datetime(2026, 5, 9, 0, 0, tzinfo=timezone.utc)
+
+
+def test_build_forecast_honors_local_timezone():
+    hourly = {
+        "time": ["2026-05-09T08:00"],
+        "temperature_2m": [18.0],
+        "dew_point_2m": [8.0],
+        "cloud_cover": [40],
+        "cloud_cover_low": [10],
+        "cloud_cover_mid": [20],
+        "cloud_cover_high": [10],
+    }
+    pdt = timezone(timedelta(hours=-7), "PDT")
+    f = _build_forecast(hourly, 0, pdt)
+    assert f.time == datetime(2026, 5, 9, 8, 0, tzinfo=pdt)
+    assert f.time.tzname() == "PDT"
+
+
+def test_site_timezone_parses_open_meteo_payload():
+    tz = _site_timezone(
+        {
+            "utc_offset_seconds": -25200,
+            "timezone": "America/Los_Angeles",
+            "timezone_abbreviation": "PDT",
+        }
+    )
+    assert tz.utcoffset(None) == timedelta(hours=-7)
+    assert tz.tzname(None) == "PDT"
+
+
+def test_site_timezone_defaults_to_utc_when_missing():
+    tz = _site_timezone({})
+    assert tz.utcoffset(None) == timedelta(0)
+    assert tz.tzname(None) == "UTC"
+
+
+def test_format_forecast_shows_local_timezone_in_header():
+    pdt = timezone(timedelta(hours=-7), "PDT")
+    local_forecast = CloudHeightForecast(
+        time=datetime(2026, 5, 9, 20, 0, tzinfo=pdt),
+        temperature_c=18.0,
+        dewpoint_c=8.0,
+        cloud_cover_pct=40.0,
+        cloud_cover_low_pct=10.0,
+        cloud_cover_mid_pct=20.0,
+        cloud_cover_high_pct=10.0,
+        cloud_base_height_agl_m=lifted_condensation_level_m(18.0, 8.0),
+    )
+    out = format_forecast([local_forecast], HENRY_COE)
+    assert "Time (PDT)" in out
+    assert "2026-05-09 20:00" in out
 
 
 def test_format_forecast_includes_site_header_and_rows():

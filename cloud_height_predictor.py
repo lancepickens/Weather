@@ -13,7 +13,7 @@ import sys
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Iterable
 
@@ -72,6 +72,11 @@ def is_below_ridge(forecast: CloudHeightForecast, site: Site) -> bool:
     return cloud_base_height_msl_m(forecast, site) < site.ridge_height_m
 
 
+def is_extinction(forecast: CloudHeightForecast, site: Site) -> bool:
+    """True when the cloud base sits at or below the site — observer is in cloud."""
+    return cloud_base_height_msl_m(forecast, site) <= site.elevation_m
+
+
 def load_sites(path: Path | str = DEFAULT_CONFIG_PATH) -> dict[str, Site]:
     """Load and validate the sites config, returning an id -> Site mapping."""
     path = Path(path)
@@ -108,11 +113,13 @@ def load_sites(path: Path | str = DEFAULT_CONFIG_PATH) -> dict[str, Site]:
     return sites
 
 
-def _build_forecast(hourly: dict, index: int) -> CloudHeightForecast:
+def _build_forecast(
+    hourly: dict, index: int, tz: tzinfo = timezone.utc
+) -> CloudHeightForecast:
     temp = hourly["temperature_2m"][index]
     dew = hourly["dew_point_2m"][index]
     return CloudHeightForecast(
-        time=datetime.fromisoformat(hourly["time"][index]).replace(tzinfo=timezone.utc),
+        time=datetime.fromisoformat(hourly["time"][index]).replace(tzinfo=tz),
         temperature_c=temp,
         dewpoint_c=dew,
         cloud_cover_pct=hourly["cloud_cover"][index],
@@ -139,18 +146,25 @@ def _fetch_open_meteo(site: Site, hours: int) -> dict:
             ]
         ),
         "forecast_days": max(1, (hours + 23) // 24),
-        "timezone": "UTC",
+        "timezone": "auto",
     }
     url = f"{OPEN_METEO_URL}?{urllib.parse.urlencode(params)}"
     with urllib.request.urlopen(url, timeout=15) as resp:
         return json.load(resp)
 
 
+def _site_timezone(payload: dict) -> tzinfo:
+    offset = timedelta(seconds=int(payload.get("utc_offset_seconds", 0)))
+    name = payload.get("timezone_abbreviation") or payload.get("timezone") or "UTC"
+    return timezone(offset, name)
+
+
 def predict(site: Site, hours: int = 24) -> list[CloudHeightForecast]:
-    """Return hourly cloud-height forecasts for the given site."""
+    """Return hourly cloud-height forecasts for the given site in site-local time."""
     data = _fetch_open_meteo(site, hours)
     hourly = data["hourly"]
-    return [_build_forecast(hourly, i) for i in range(min(hours, len(hourly["time"])))]
+    tz = _site_timezone(data)
+    return [_build_forecast(hourly, i, tz) for i in range(min(hours, len(hourly["time"])))]
 
 
 def format_forecast(forecasts: Iterable[CloudHeightForecast], site: Site) -> str:
@@ -158,24 +172,31 @@ def format_forecast(forecasts: Iterable[CloudHeightForecast], site: Site) -> str
     ridge_note = (
         f", ridge {site.ridge_height_m:.0f} m" if site.ridge_height_m is not None else ""
     )
+    tz_label = forecasts[0].time.tzname() if forecasts else "UTC"
+    time_col = f"Time ({tz_label})"
+    time_col_width = max(17, len(time_col))
     header = (
         f"Cloud base height forecast — {site.name} "
         f"(lat {site.latitude}, lon {site.longitude}, "
         f"elev {site.elevation_m:.0f} m MSL{ridge_note})\n\n"
-        f"{'Time (UTC)':<17} {'T°C':>5} {'Td°C':>5} {'Cov%':>5} "
+        f"{time_col:<{time_col_width}} {'T°C':>5} {'Td°C':>5} {'Cov%':>5} "
         f"{'Low%':>5} {'Mid%':>5} {'High%':>6} "
         f"{'Base m AGL':>11} {'Base m MSL':>11}  Note"
     )
     rows = [header]
     for f in forecasts:
-        note = "below ridge" if is_below_ridge(f, site) else ""
+        notes = []
+        if is_extinction(f, site):
+            notes.append("extinction")
+        if is_below_ridge(f, site):
+            notes.append("below ridge")
         rows.append(
-            f"{f.time.strftime('%Y-%m-%d %H:%M'):<17} "
+            f"{f.time.strftime('%Y-%m-%d %H:%M'):<{time_col_width}} "
             f"{f.temperature_c:>5.1f} {f.dewpoint_c:>5.1f} "
             f"{f.cloud_cover_pct:>5.0f} {f.cloud_cover_low_pct:>5.0f} "
             f"{f.cloud_cover_mid_pct:>5.0f} {f.cloud_cover_high_pct:>6.0f} "
             f"{f.cloud_base_height_agl_m:>11.0f} "
-            f"{cloud_base_height_msl_m(f, site):>11.0f}  {note}"
+            f"{cloud_base_height_msl_m(f, site):>11.0f}  {', '.join(notes)}"
         )
     return "\n".join(rows)
 
