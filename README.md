@@ -10,10 +10,14 @@ temperature and dewpoint from DWD's ICON model via Open-Meteo
 (`models=icon_seamless`) and Espy's equation (`H ≈ 125 × (T − Td)` meters). Output is restricted to
 astronomical night hours (sunset to sunrise at the site's local
 coordinates) and shown in the site's local timezone, grouped per night.
-Each hour includes cloud cover by layer plus base height in meters AGL
-and MSL, and the Note column flags `extinction` when the modeled cloud
-base sits at or below the site (observer in cloud) and `below ridge`
-when the deck is below the site's local ridge (if configured).
+Each hour includes 2 m relative humidity, cloud cover by layer, and base
+height in meters AGL and MSL. The Note column flags `extinction` when
+the modeled cloud base sits at or below the site (observer in cloud),
+`below ridge` when the deck is below the site's local ridge (if
+configured), and `marine-layer risk` when surface RH exceeds 90 % even
+if cloud_cover reads 0 % — this catches grid-snap "dry island"
+artifacts at coastal/inland boundaries where the model places the site
+just above the marine layer.
 
 The seed config ships with Henry W. Coe State Park; add more entries to
 `sites.json` as needed.

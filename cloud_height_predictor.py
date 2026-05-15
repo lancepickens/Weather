@@ -24,6 +24,11 @@ DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "sites.json"
 # depression. Good rule-of-thumb accuracy for convective cloud bases.
 ESPY_COEFFICIENT_M_PER_C = 125.0
 
+# Surface RH above this is a marine-layer / fog risk even when the model's
+# integrated cloud_cover field reads 0% — catches grid-snap "dry island"
+# artifacts at coastal/inland boundaries.
+MARINE_LAYER_RH_THRESHOLD_PCT = 90.0
+
 
 @dataclass(frozen=True)
 class Site:
@@ -44,6 +49,7 @@ class CloudHeightForecast:
     time: datetime
     temperature_c: float
     dewpoint_c: float
+    relative_humidity_pct: float
     cloud_cover_pct: float
     cloud_cover_low_pct: float
     cloud_cover_mid_pct: float
@@ -75,6 +81,12 @@ def is_below_ridge(forecast: CloudHeightForecast, site: Site) -> bool:
 def is_extinction(forecast: CloudHeightForecast, site: Site) -> bool:
     """True when the cloud base sits at or below the site — observer is in cloud."""
     return cloud_base_height_msl_m(forecast, site) <= site.elevation_m
+
+
+def is_marine_layer_risk(forecast: CloudHeightForecast) -> bool:
+    """True when surface RH is high enough that fog/stratus is plausible
+    even if the model's integrated cloud_cover field reads near zero."""
+    return forecast.relative_humidity_pct > MARINE_LAYER_RH_THRESHOLD_PCT
 
 
 def load_sites(path: Path | str = DEFAULT_CONFIG_PATH) -> dict[str, Site]:
@@ -122,6 +134,7 @@ def _build_forecast(
         time=datetime.fromisoformat(hourly["time"][index]).replace(tzinfo=tz),
         temperature_c=temp,
         dewpoint_c=dew,
+        relative_humidity_pct=hourly["relative_humidity_2m"][index],
         cloud_cover_pct=hourly["cloud_cover"][index],
         cloud_cover_low_pct=hourly["cloud_cover_low"][index],
         cloud_cover_mid_pct=hourly["cloud_cover_mid"][index],
@@ -139,6 +152,7 @@ def _fetch_open_meteo(site: Site, forecast_days: int) -> dict:
             [
                 "temperature_2m",
                 "dew_point_2m",
+                "relative_humidity_2m",
                 "cloud_cover",
                 "cloud_cover_low",
                 "cloud_cover_mid",
@@ -225,8 +239,8 @@ def format_forecast(
         f"Cloud base height forecast — {site.name} "
         f"(lat {site.latitude}, lon {site.longitude}, "
         f"elev {site.elevation_m:.0f} m MSL{ridge_note})\n\n"
-        f"{time_col:<{time_col_width}} {'T°C':>5} {'Td°C':>5} {'Cov%':>5} "
-        f"{'Low%':>5} {'Mid%':>5} {'High%':>6} "
+        f"{time_col:<{time_col_width}} {'T°C':>5} {'Td°C':>5} {'RH%':>5} "
+        f"{'Cov%':>5} {'Low%':>5} {'Mid%':>5} {'High%':>6} "
         f"{'Base m AGL':>11} {'Base m MSL':>11}  Note"
     )
     rows = [header]
@@ -240,9 +254,12 @@ def format_forecast(
                 notes.append("extinction")
             if is_below_ridge(f, site):
                 notes.append("below ridge")
+            if is_marine_layer_risk(f):
+                notes.append("marine-layer risk")
             rows.append(
                 f"{f.time.strftime('%Y-%m-%d %H:%M'):<{time_col_width}} "
                 f"{f.temperature_c:>5.1f} {f.dewpoint_c:>5.1f} "
+                f"{f.relative_humidity_pct:>5.0f} "
                 f"{f.cloud_cover_pct:>5.0f} {f.cloud_cover_low_pct:>5.0f} "
                 f"{f.cloud_cover_mid_pct:>5.0f} {f.cloud_cover_high_pct:>6.0f} "
                 f"{f.cloud_base_height_agl_m:>11.0f} "

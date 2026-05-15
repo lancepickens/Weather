@@ -21,6 +21,7 @@ from cloud_height_predictor import (  # noqa: E402
     format_site_list,
     is_below_ridge,
     is_extinction,
+    is_marine_layer_risk,
     lifted_condensation_level_m,
     load_sites,
     main,
@@ -37,11 +38,12 @@ HENRY_COE = Site(
 )
 
 
-def _forecast(temp: float, dew: float) -> CloudHeightForecast:
+def _forecast(temp: float, dew: float, rh: float = 50.0) -> CloudHeightForecast:
     return CloudHeightForecast(
         time=datetime(2026, 5, 9, 0, 0, tzinfo=timezone.utc),
         temperature_c=temp,
         dewpoint_c=dew,
+        relative_humidity_pct=rh,
         cloud_cover_pct=40.0,
         cloud_cover_low_pct=10.0,
         cloud_cover_mid_pct=20.0,
@@ -90,6 +92,33 @@ def test_format_forecast_flags_extinction_note():
     assert "extinction" in out
 
 
+def test_marine_layer_risk_when_rh_above_threshold():
+    assert is_marine_layer_risk(_forecast(12.0, 10.0, rh=95.0)) is True
+
+
+def test_no_marine_layer_risk_at_or_below_threshold():
+    assert is_marine_layer_risk(_forecast(12.0, 10.0, rh=90.0)) is False
+    assert is_marine_layer_risk(_forecast(20.0, 5.0, rh=40.0)) is False
+
+
+def test_format_forecast_flags_marine_layer_risk_with_dry_island():
+    # Mimics the grid-snap artifact: model says 0% cloud but RH is saturated.
+    dry_island = CloudHeightForecast(
+        time=datetime(2026, 5, 14, 22, 0, tzinfo=timezone.utc),
+        temperature_c=10.0,
+        dewpoint_c=9.5,
+        relative_humidity_pct=97.0,
+        cloud_cover_pct=0.0,
+        cloud_cover_low_pct=0.0,
+        cloud_cover_mid_pct=0.0,
+        cloud_cover_high_pct=0.0,
+        cloud_base_height_agl_m=lifted_condensation_level_m(10.0, 9.5),
+    )
+    out = format_forecast([[dry_island]], HENRY_COE)
+    assert "marine-layer risk" in out
+    assert "RH%" in out
+
+
 def test_is_below_ridge_returns_false_when_ridge_unset():
     flat_site = Site(
         id="flat",
@@ -108,6 +137,7 @@ def test_build_forecast_from_hourly_payload():
         "time": ["2026-05-09T00:00", "2026-05-09T01:00"],
         "temperature_2m": [18.0, 17.0],
         "dew_point_2m": [8.0, 9.0],
+        "relative_humidity_2m": [52.0, 60.0],
         "cloud_cover": [40, 60],
         "cloud_cover_low": [10, 30],
         "cloud_cover_mid": [20, 20],
@@ -118,6 +148,8 @@ def test_build_forecast_from_hourly_payload():
     assert f0.cloud_base_height_agl_m == 1250.0
     assert f1.cloud_base_height_agl_m == 1000.0
     assert f0.time == datetime(2026, 5, 9, 0, 0, tzinfo=timezone.utc)
+    assert f0.relative_humidity_pct == 52.0
+    assert f1.relative_humidity_pct == 60.0
 
 
 def test_build_forecast_honors_local_timezone():
@@ -125,6 +157,7 @@ def test_build_forecast_honors_local_timezone():
         "time": ["2026-05-09T08:00"],
         "temperature_2m": [18.0],
         "dew_point_2m": [8.0],
+        "relative_humidity_2m": [50.0],
         "cloud_cover": [40],
         "cloud_cover_low": [10],
         "cloud_cover_mid": [20],
@@ -160,6 +193,7 @@ def test_format_forecast_shows_local_timezone_in_header():
         time=datetime(2026, 5, 9, 20, 0, tzinfo=pdt),
         temperature_c=18.0,
         dewpoint_c=8.0,
+        relative_humidity_pct=50.0,
         cloud_cover_pct=40.0,
         cloud_cover_low_pct=10.0,
         cloud_cover_mid_pct=20.0,
@@ -192,6 +226,7 @@ def test_format_forecast_separates_multiple_nights():
         time=datetime(2026, 5, 14, 22, 0, tzinfo=pdt),
         temperature_c=15.0,
         dewpoint_c=5.0,
+        relative_humidity_pct=50.0,
         cloud_cover_pct=20.0,
         cloud_cover_low_pct=5.0,
         cloud_cover_mid_pct=10.0,
@@ -202,6 +237,7 @@ def test_format_forecast_separates_multiple_nights():
         time=datetime(2026, 5, 15, 22, 0, tzinfo=pdt),
         temperature_c=15.0,
         dewpoint_c=5.0,
+        relative_humidity_pct=50.0,
         cloud_cover_pct=20.0,
         cloud_cover_low_pct=5.0,
         cloud_cover_mid_pct=10.0,
@@ -213,12 +249,13 @@ def test_format_forecast_separates_multiple_nights():
     assert "Night of 2026-05-15" in out
 
 
-def _make_hourly_payload(times, is_day, temp=15.0, dew=5.0):
+def _make_hourly_payload(times, is_day, temp=15.0, dew=5.0, rh=50.0):
     n = len(times)
     return {
         "time": times,
         "temperature_2m": [temp] * n,
         "dew_point_2m": [dew] * n,
+        "relative_humidity_2m": [rh] * n,
         "cloud_cover": [30] * n,
         "cloud_cover_low": [10] * n,
         "cloud_cover_mid": [10] * n,
