@@ -24,6 +24,12 @@ import numpy as np
 from PIL import Image
 from scipy.ndimage import gaussian_filter1d, median_filter, sobel
 
+# Default crop for the wide-FOV (~65°) AlertCalifornia PTZ cams: a small
+# upper-center sky patch that fits index series ≤ 4116 (which most home
+# astrometry installs include). Override per-camera if needed.
+DEFAULT_CROP: tuple[int, int, int, int] = (860, 100, 200, 200)
+DEFAULT_CROP_SCALE_RANGE: tuple[float, float] = (5.0, 8.0)
+
 
 @dataclass
 class CalibrationData:
@@ -95,14 +101,24 @@ def _parse_wcs_fits(wcs_path: Path) -> dict:
         hdr = hdul[0].header
     wcs = WCS(hdr)
 
-    keys = (
-        "CTYPE1", "CTYPE2", "CRVAL1", "CRVAL2", "CRPIX1", "CRPIX2",
+    float_keys = (
+        "CRVAL1", "CRVAL2", "CRPIX1", "CRPIX2",
         "CD1_1", "CD1_2", "CD2_1", "CD2_2",
         "CDELT1", "CDELT2", "CROTA1", "CROTA2",
-        "NAXIS", "NAXIS1", "NAXIS2", "EQUINOX",
+        "EQUINOX",
     )
-    out = {k: float(hdr[k]) if k in hdr and isinstance(hdr[k], (int, float)) else hdr.get(k) for k in keys}
-    out = {k: v for k, v in out.items() if v is not None}
+    str_keys = ("CTYPE1", "CTYPE2", "RADESYS", "RADECSYS")
+    out: dict = {}
+    for k in float_keys:
+        if k in hdr:
+            out[k] = float(hdr[k])
+    for k in str_keys:
+        if k in hdr:
+            out[k] = str(hdr[k])
+    # Note: deliberately skip NAXIS / NAXIS1 / NAXIS2. Our CalibrationData
+    # already records image dimensions in image_width / image_height; if
+    # we round-trip NAXIS=0 from a .wcs sidecar, astropy.wcs.WCS chokes
+    # because the value gets coerced to float during JSON round-trip.
 
     # astropy.wcs.utils.proj_plane_pixel_scales returns a pair of pixel scales
     # in the WCS units (degrees per pixel for celestial WCS).
@@ -117,21 +133,41 @@ def _parse_wcs_fits(wcs_path: Path) -> dict:
     return out
 
 
-def run_solve_field(image_path: Path, scale_low: float | None = None, scale_high: float | None = None) -> Path:
-    """Invoke the local astrometry.net `solve-field` and return path to .wcs.
+def run_solve_field(
+    image_path: Path,
+    scale_low: float | None = None,
+    scale_high: float | None = None,
+    crop: tuple[int, int, int, int] | None = None,
+    cpulimit: int = 60,
+) -> tuple[Path, tuple[int, int]]:
+    """Invoke the local astrometry.net `solve-field` and return (wcs_path, crop_offset).
 
-    Caller is responsible for setting up the astrometry index files. The
-    AlertCalifornia StarrCanyon camera has FOV ≈ 65°; pass --scale-low /
-    --scale-high in degrees if you want to narrow the search.
+    If ``crop = (x, y, w, h)`` is given, solve a sub-region instead of the
+    full frame — useful when the camera's native FOV (e.g. 65° for the
+    AlertCalifornia StarrCanyon cam) exceeds what the installed index
+    series cover. The returned ``crop_offset = (x, y)`` lets the caller
+    translate the cropped WCS back to full-frame pixel coordinates.
     """
     image_path = Path(image_path)
+    solve_input = image_path
+    offset = (0, 0)
+
+    if crop is not None:
+        x, y, w, h = crop
+        img = Image.open(image_path)
+        patch = img.crop((x, y, x + w, y + h))
+        solve_input = image_path.with_suffix(".crop.jpg")
+        patch.save(solve_input, quality=95)
+        offset = (x, y)
+
     cmd = [
         "solve-field",
         "--no-plots",
         "--no-verify",
         "--overwrite",
         "--crpix-center",
-        str(image_path),
+        "--cpulimit", str(cpulimit),
+        str(solve_input),
     ]
     if scale_low is not None and scale_high is not None:
         cmd.extend(
@@ -142,16 +178,29 @@ def run_solve_field(image_path: Path, scale_low: float | None = None, scale_high
             ]
         )
     proc = subprocess.run(cmd, capture_output=True, text=True)
-    if proc.returncode != 0:
+    if proc.returncode != 0 or "did not solve" in proc.stdout.lower():
         sys.stderr.write(proc.stdout + "\n" + proc.stderr + "\n")
         raise RuntimeError(
-            f"solve-field exited {proc.returncode}. Common cause: no index files installed for this FOV. "
-            "See README troubleshooting section."
+            f"solve-field failed (exit {proc.returncode}). Common causes: "
+            "no index files for this FOV (install wider series, or use --crop "
+            "to solve a smaller patch); too few stars (use a clearer frame)."
         )
-    wcs_path = image_path.with_suffix(".wcs")
+    wcs_path = solve_input.with_suffix(".wcs")
     if not wcs_path.exists():
         raise RuntimeError(f"solve-field finished but produced no {wcs_path}")
-    return wcs_path
+    return wcs_path, offset
+
+
+def _wcs_with_full_frame_offset(wcs: dict, offset: tuple[int, int]) -> dict:
+    """Shift CRPIX so a cropped WCS describes pixel positions in the full frame."""
+    if offset == (0, 0):
+        return wcs
+    out = dict(wcs)
+    if "CRPIX1" in out:
+        out["CRPIX1"] = float(out["CRPIX1"]) + float(offset[0])
+    if "CRPIX2" in out:
+        out["CRPIX2"] = float(out["CRPIX2"]) + float(offset[1])
+    return out
 
 
 def calibrate(
@@ -164,6 +213,7 @@ def calibrate(
     wcs_path: Path | None = None,
     solve: bool = False,
     scale_range: tuple[float, float] | None = None,
+    solve_crop: tuple[int, int, int, int] | None = None,
 ) -> CalibrationData:
     """Compute calibration data from a daylight (or clear-night) frame."""
     image_path = Path(image_path)
@@ -175,9 +225,12 @@ def calibrate(
     if wcs_path is not None:
         wcs = _parse_wcs_fits(Path(wcs_path))
     elif solve:
-        low, high = scale_range or (50.0, 80.0)
-        wcs_file = run_solve_field(image_path, scale_low=low, scale_high=high)
-        wcs = _parse_wcs_fits(wcs_file)
+        crop = solve_crop if solve_crop is not None else DEFAULT_CROP
+        low, high = scale_range or DEFAULT_CROP_SCALE_RANGE
+        wcs_file, offset = run_solve_field(
+            image_path, scale_low=low, scale_high=high, crop=crop
+        )
+        wcs = _wcs_with_full_frame_offset(_parse_wcs_fits(wcs_file), offset)
     else:
         # Allow a calibration without WCS — useful for the horizon-only
         # smoke test. Detection accuracy degrades to brightness statistics.
@@ -214,13 +267,41 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--elevation", type=float, default=795.0)
     parser.add_argument("--solve", action="store_true", help="Invoke local solve-field on the image.")
     parser.add_argument("--wcs-file", type=Path, help="Path to a pre-solved .wcs FITS header.")
-    parser.add_argument("--scale-low", type=float, default=50.0, help="solve-field --scale-low (degrees of frame width).")
-    parser.add_argument("--scale-high", type=float, default=80.0, help="solve-field --scale-high (degrees of frame width).")
+    parser.add_argument(
+        "--solve-crop",
+        type=str,
+        default=",".join(str(v) for v in DEFAULT_CROP),
+        help="Crop region for --solve as 'x,y,w,h'. Wide-FOV cams need a smaller patch "
+             "to fit standard astrometry indices. Pass 'none' to solve the full frame.",
+    )
+    parser.add_argument(
+        "--scale-low",
+        type=float,
+        default=DEFAULT_CROP_SCALE_RANGE[0],
+        help="solve-field --scale-low in degwidth (default tuned for --solve-crop).",
+    )
+    parser.add_argument(
+        "--scale-high",
+        type=float,
+        default=DEFAULT_CROP_SCALE_RANGE[1],
+        help="solve-field --scale-high in degwidth (default tuned for --solve-crop).",
+    )
     parser.add_argument("--output", type=Path, default=Path("calibration.json"))
     args = parser.parse_args(argv)
 
     if args.solve and args.wcs_file:
         parser.error("--solve and --wcs-file are mutually exclusive")
+
+    solve_crop: tuple[int, int, int, int] | None
+    if args.solve_crop.strip().lower() == "none":
+        solve_crop = None
+    else:
+        try:
+            parts = tuple(int(v.strip()) for v in args.solve_crop.split(","))
+            assert len(parts) == 4
+            solve_crop = parts  # type: ignore[assignment]
+        except (ValueError, AssertionError):
+            parser.error(f"--solve-crop must be 'x,y,w,h' or 'none' (got {args.solve_crop!r})")
 
     data = calibrate(
         image_path=args.image,
@@ -231,6 +312,7 @@ def main(argv: list[str] | None = None) -> int:
         wcs_path=args.wcs_file,
         solve=args.solve,
         scale_range=(args.scale_low, args.scale_high) if args.solve else None,
+        solve_crop=solve_crop,
     )
     save_calibration(data, args.output)
     print(
