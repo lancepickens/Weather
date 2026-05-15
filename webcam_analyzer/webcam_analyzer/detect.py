@@ -131,7 +131,7 @@ def project_stars_to_pixels(
 
 
 def detect_at_position(
-    image: np.ndarray, x: float, y: float, window: int = 7, snr_threshold: float = 4.0
+    image: np.ndarray, x: float, y: float, window: int = 9, snr_threshold: float = 3.0
 ) -> bool:
     """Is there a point source within `window` pixels of (x, y)?
 
@@ -166,10 +166,11 @@ def score_frame(
     horizon_y = np.array(calibration.horizon_y, dtype=np.int32)
     dy, dx = estimate_drift(img, reference_image, horizon_y)
 
-    # Background-subtracted sky for star detection: subtract a heavy
-    # median (~21 px) to remove static gradients (light pollution, etc.).
-    sky_bg = median_filter(img, size=21)
-    sky_residual = img - sky_bg
+    # detect_at_position computes a per-window median for background;
+    # a global median_filter pass was previously the per-frame bottleneck
+    # (4.5 s on a 1920×1080 frame) and contributes nothing the local
+    # estimator doesn't already cover.
+    sky_residual = img
 
     # Compute sky-region brightness statistics (above-horizon pixels).
     sky_mask_rows = np.arange(img.shape[0])[:, None] < horizon_y[None, :]
