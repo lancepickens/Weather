@@ -24,6 +24,7 @@ from cloud_height_predictor import (  # noqa: E402
     format_site_list,
     is_below_ridge,
     is_extinction,
+    is_marine_layer_below,
     is_marine_layer_risk,
     lifted_condensation_level_m,
     load_sites,
@@ -120,6 +121,108 @@ def test_format_forecast_flags_marine_layer_risk_with_dry_island():
     out = format_forecast([[dry_island]], HENRY_COE)
     assert "marine-layer risk" in out
     assert "RH%" in out
+
+
+def _undercast_forecast(*, center_rh: float, center_cov: float, ring_rh: float) -> CloudHeightForecast:
+    """Helper to build a forecast with explicit center vs ring values."""
+    return CloudHeightForecast(
+        time=datetime(2026, 5, 15, 2, 0, tzinfo=timezone.utc),
+        temperature_c=10.0,
+        dewpoint_c=11.5,           # ring-max Td (saturated)
+        relative_humidity_pct=ring_rh,
+        cloud_cover_pct=100.0,
+        cloud_cover_low_pct=100.0,
+        cloud_cover_mid_pct=0.0,
+        cloud_cover_high_pct=0.0,
+        cloud_base_height_agl_m=0.0,  # ring-max says cloud base at the ground
+        center_dewpoint_c=-1.0,
+        center_relative_humidity_pct=center_rh,
+        center_cloud_cover_pct=center_cov,
+        center_cloud_cover_low_pct=center_cov,
+        center_cloud_base_height_agl_m=1400.0,
+    )
+
+
+def test_marine_layer_below_fires_when_center_dry_ring_saturated():
+    f = _undercast_forecast(center_rh=46.0, center_cov=0.0, ring_rh=100.0)
+    assert is_marine_layer_below(f) is True
+
+
+def test_marine_layer_below_does_not_fire_when_center_also_saturated():
+    f = _undercast_forecast(center_rh=95.0, center_cov=100.0, ring_rh=100.0)
+    assert is_marine_layer_below(f) is False
+
+
+def test_marine_layer_below_does_not_fire_when_ring_is_dry():
+    f = _undercast_forecast(center_rh=46.0, center_cov=0.0, ring_rh=60.0)
+    assert is_marine_layer_below(f) is False
+
+
+def test_format_forecast_emits_marine_layer_below_note():
+    f = _undercast_forecast(center_rh=46.0, center_cov=0.0, ring_rh=100.0)
+    out = format_forecast([[f]], HENRY_COE)
+    assert "marine layer below" in out
+    # Conservative flags still fire on the ring-max values — both notes coexist.
+    assert "extinction" in out
+
+
+def test_build_forecast_populates_center_fields_from_payload():
+    payload = {
+        "time": ["2026-05-15T02:00"],
+        "temperature_2m": [10.0],
+        "dew_point_2m": [11.5],            # ring-max
+        "relative_humidity_2m": [100.0],   # ring-max
+        "cloud_cover": [100],
+        "cloud_cover_low": [100],
+        "cloud_cover_mid": [0],
+        "cloud_cover_high": [0],
+        "center_dew_point_2m": [-1.0],
+        "center_relative_humidity_2m": [46.0],
+        "center_cloud_cover": [0],
+        "center_cloud_cover_low": [0],
+    }
+    f = _build_forecast(payload, 0)
+    assert f.center_relative_humidity_pct == 46.0
+    assert f.center_cloud_cover_pct == 0.0
+    assert f.center_dewpoint_c == -1.0
+    # Center cloud base computed from T and center Td: spread = 11°C → 1375 m
+    assert abs(f.center_cloud_base_height_agl_m - 1375.0) < 1e-6
+
+
+def test_aggregate_cells_preserves_center_diagnostics():
+    from cloud_height_predictor import _aggregate_cells
+
+    dry_center = {
+        "utc_offset_seconds": -25200, "timezone_abbreviation": "PDT",
+        "hourly": {
+            "time": ["2026-05-15T02:00"],
+            "temperature_2m": [10.0],
+            "is_day": [0],
+            "dew_point_2m": [-1.0],
+            "relative_humidity_2m": [46],
+            "cloud_cover": [0], "cloud_cover_low": [0],
+            "cloud_cover_mid": [0], "cloud_cover_high": [0],
+        },
+    }
+    wet_neighbour = {
+        "utc_offset_seconds": -25200, "timezone_abbreviation": "PDT",
+        "hourly": {
+            "time": ["2026-05-15T02:00"],
+            "temperature_2m": [10.0],
+            "is_day": [0],
+            "dew_point_2m": [11.5],
+            "relative_humidity_2m": [100],
+            "cloud_cover": [100], "cloud_cover_low": [100],
+            "cloud_cover_mid": [0], "cloud_cover_high": [0],
+        },
+    }
+    out = _aggregate_cells([dry_center, wet_neighbour])["hourly"]
+    # Ring-max view (worst case across cells).
+    assert out["relative_humidity_2m"] == [100]
+    assert out["cloud_cover"] == [100]
+    # Center view (the dry coordinate's own forecast).
+    assert out["center_relative_humidity_2m"] == [46]
+    assert out["center_cloud_cover"] == [0]
 
 
 def test_is_below_ridge_returns_false_when_ridge_unset():

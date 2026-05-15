@@ -50,7 +50,17 @@ class Site:
 
 @dataclass(frozen=True)
 class CloudHeightForecast:
-    """A single hourly cloud-height prediction."""
+    """A single hourly cloud-height prediction.
+
+    The ring-aggregated ``cloud_cover*``, ``relative_humidity_pct``, and
+    ``dewpoint_c`` reflect the worst case across a 3×3 neighbour ring
+    (see ``_aggregate_cells``). The matching ``center_*`` fields carry
+    what the model says at the site's exact configured coordinate.
+    Comparing the two lets callers distinguish "site in marine layer"
+    from "site above an undercast that only fills the surrounding
+    lower-elevation cells" — a distinction the ring-max view alone
+    cannot make.
+    """
 
     time: datetime
     temperature_c: float
@@ -61,6 +71,12 @@ class CloudHeightForecast:
     cloud_cover_mid_pct: float
     cloud_cover_high_pct: float
     cloud_base_height_agl_m: float
+    # Center-cell view (the model's point forecast for the site coordinate).
+    center_dewpoint_c: float = 0.0
+    center_relative_humidity_pct: float = 0.0
+    center_cloud_cover_pct: float = 0.0
+    center_cloud_cover_low_pct: float = 0.0
+    center_cloud_base_height_agl_m: float = 0.0
 
 
 def lifted_condensation_level_m(temperature_c: float, dewpoint_c: float) -> float:
@@ -93,6 +109,33 @@ def is_marine_layer_risk(forecast: CloudHeightForecast) -> bool:
     """True when surface RH is high enough that fog/stratus is plausible
     even if the model's integrated cloud_cover field reads near zero."""
     return forecast.relative_humidity_pct > MARINE_LAYER_RH_THRESHOLD_PCT
+
+
+# Thresholds for diagnosing an "undercast below site" pattern: marine
+# layer / fog filling the surrounding lower-elevation cells while the
+# configured site coordinate is dry and clear. Tuned against the
+# 2026-05-14/15 Henry Coe night where the cam confirmed clear skies
+# despite full marine-layer flags from the ring aggregator.
+UNDERCAST_CENTER_RH_MAX_PCT = 70.0
+UNDERCAST_CENTER_COVER_MAX_PCT = 30.0
+
+
+def is_marine_layer_below(forecast: CloudHeightForecast) -> bool:
+    """True when the center cell is dry/clear while the neighbour ring is saturated.
+
+    Pattern: site sits on or above an inversion top — fog/stratus fills
+    the lower-elevation cells in every direction, but the site itself
+    pokes above the layer. When this fires alongside the conservative
+    ``extinction`` / ``below ridge`` / ``marine-layer risk`` flags, the
+    conservative flags are almost always about cells *below* the site;
+    overhead observing conditions are likely good.
+    """
+    center_dry = (
+        forecast.center_relative_humidity_pct < UNDERCAST_CENTER_RH_MAX_PCT
+        and forecast.center_cloud_cover_pct < UNDERCAST_CENTER_COVER_MAX_PCT
+    )
+    ring_saturated = forecast.relative_humidity_pct > MARINE_LAYER_RH_THRESHOLD_PCT
+    return center_dry and ring_saturated
 
 
 def load_sites(path: Path | str = DEFAULT_CONFIG_PATH) -> dict[str, Site]:
@@ -136,6 +179,12 @@ def _build_forecast(
 ) -> CloudHeightForecast:
     temp = hourly["temperature_2m"][index]
     dew = hourly["dew_point_2m"][index]
+    # Center fields default to ring values when the payload omits them
+    # (older test fixtures or pre-aggregation callers).
+    center_dew = hourly.get("center_dew_point_2m", hourly["dew_point_2m"])[index]
+    center_rh = hourly.get("center_relative_humidity_2m", hourly["relative_humidity_2m"])[index]
+    center_cov = hourly.get("center_cloud_cover", hourly["cloud_cover"])[index]
+    center_low = hourly.get("center_cloud_cover_low", hourly["cloud_cover_low"])[index]
     return CloudHeightForecast(
         time=datetime.fromisoformat(hourly["time"][index]).replace(tzinfo=tz),
         temperature_c=temp,
@@ -146,6 +195,11 @@ def _build_forecast(
         cloud_cover_mid_pct=hourly["cloud_cover_mid"][index],
         cloud_cover_high_pct=hourly["cloud_cover_high"][index],
         cloud_base_height_agl_m=lifted_condensation_level_m(temp, dew),
+        center_dewpoint_c=center_dew,
+        center_relative_humidity_pct=center_rh,
+        center_cloud_cover_pct=center_cov,
+        center_cloud_cover_low_pct=center_low,
+        center_cloud_base_height_agl_m=lifted_condensation_level_m(temp, center_dew),
     )
 
 
@@ -175,6 +229,14 @@ _RING_MAX_KEYS = (
     "cloud_cover_high",
 )
 _CENTER_KEYS = ("time", "temperature_2m", "is_day")
+# Center-cell values we keep alongside the ring-max view, exposed to
+# callers under a ``center_`` prefix on the aggregated payload.
+_CENTER_DIAGNOSTIC_KEYS = (
+    "dew_point_2m",
+    "relative_humidity_2m",
+    "cloud_cover",
+    "cloud_cover_low",
+)
 
 
 def _aggregate_cells(cells: list[dict]) -> dict:
@@ -184,12 +246,18 @@ def _aggregate_cells(cells: list[dict]) -> dict:
     timezone fields. Cloud-cover layers, dew_point_2m, and
     relative_humidity_2m become the element-wise max across all cells —
     the conservative worst-case observable from anywhere in the ring.
+
+    The center cell's own moisture/cloud values are *also* preserved
+    under ``center_<key>`` so callers can diagnose the "site above
+    undercast" pattern (center dry, ring saturated).
     """
     center = cells[0]
     hourly = {key: center["hourly"][key] for key in _CENTER_KEYS}
     for key in _RING_MAX_KEYS:
         series = [c["hourly"][key] for c in cells]
         hourly[key] = [max(values) for values in zip(*series)]
+    for key in _CENTER_DIAGNOSTIC_KEYS:
+        hourly[f"center_{key}"] = list(center["hourly"][key])
     return {
         "utc_offset_seconds": center.get("utc_offset_seconds", 0),
         "timezone": center.get("timezone"),
@@ -314,6 +382,8 @@ def format_forecast(
                 notes.append("below ridge")
             if is_marine_layer_risk(f):
                 notes.append("marine-layer risk")
+            if is_marine_layer_below(f):
+                notes.append("marine layer below")
             rows.append(
                 f"{f.time.strftime('%Y-%m-%d %H:%M'):<{time_col_width}} "
                 f"{f.temperature_c:>5.1f} {f.dewpoint_c:>5.1f} "

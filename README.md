@@ -14,7 +14,29 @@ Each hour includes 2 m relative humidity, cloud cover by layer, and base
 height in meters AGL and MSL. The Note column flags `extinction` when
 the modeled cloud base sits at or below the site (observer in cloud),
 `below ridge` when the deck is below the site's local ridge (if
-configured), and `marine-layer risk` when surface RH exceeds 90 %.
+configured), `marine-layer risk` when surface RH exceeds 90 %, and
+`marine layer below` when the site's *center cell* is dry/clear while
+the surrounding ring is saturated (see below).
+
+### Elevation-aware: "marine layer below"
+
+The conservative flags above (`extinction`, `below ridge`,
+`marine-layer risk`) fire on the worst case across the 3×3 neighbour
+ring. That's the right behavior for false-clear safety, but at sites
+sitting at an inversion top (e.g. Henry Coe at 793 m, right at the
+typical Bay Area marine-layer ceiling) it flags overcast every night
+the layer fills the lower-elevation valleys, even when the site
+itself is clear above it. The forecast also tracks each hour's
+*center-cell* moisture and cloud cover (the model's point forecast
+for the configured coordinate); when the center is dry/clear while
+the ring is saturated, `marine layer below` fires. When that note
+appears alongside the conservative flags, treat the conservative
+flags as describing cells *below* the site — observing conditions
+overhead are likely good, and a webcam check is worth the click.
+
+This was calibrated against a 2026-05-14/15 night at Henry Coe where
+the ring aggregation flagged full extinction every hour while the
+Cal Fire webcam (and the user's eyes) confirmed clear skies overhead.
 
 ### Neighbour-cell ring sampling
 
