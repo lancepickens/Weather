@@ -29,6 +29,12 @@ ESPY_COEFFICIENT_M_PER_C = 125.0
 # artifacts at coastal/inland boundaries.
 MARINE_LAYER_RH_THRESHOLD_PCT = 90.0
 
+# Lat/lon offset for the 3×3 neighbour ring sampled around each site.
+# ICON-Global is served on a ~0.125° grid via Open-Meteo, so 0.15°
+# (~17 km at mid-latitudes) is large enough to guarantee that each ring
+# position snaps to a distinct grid cell from the center.
+NEIGHBOUR_OFFSET_DEG = 0.15
+
 
 @dataclass(frozen=True)
 class Site:
@@ -143,11 +149,62 @@ def _build_forecast(
     )
 
 
+def _neighbour_coords(site: Site) -> list[tuple[float, float]]:
+    """Return center + 8 ring coordinates around the site.
+
+    Center is index 0 by convention; aggregation routines take center-only
+    fields (T, is_day, time) from this position.
+    """
+    offsets = (-NEIGHBOUR_OFFSET_DEG, 0.0, NEIGHBOUR_OFFSET_DEG)
+    center = (site.latitude, site.longitude)
+    ring = [
+        (site.latitude + dlat, site.longitude + dlon)
+        for dlat in offsets
+        for dlon in offsets
+        if not (dlat == 0.0 and dlon == 0.0)
+    ]
+    return [center, *ring]
+
+
+_RING_MAX_KEYS = (
+    "dew_point_2m",
+    "relative_humidity_2m",
+    "cloud_cover",
+    "cloud_cover_low",
+    "cloud_cover_mid",
+    "cloud_cover_high",
+)
+_CENTER_KEYS = ("time", "temperature_2m", "is_day")
+
+
+def _aggregate_cells(cells: list[dict]) -> dict:
+    """Collapse a list of per-cell Open-Meteo payloads into one.
+
+    Center cell supplies time, temperature_2m, is_day, and the top-level
+    timezone fields. Cloud-cover layers, dew_point_2m, and
+    relative_humidity_2m become the element-wise max across all cells —
+    the conservative worst-case observable from anywhere in the ring.
+    """
+    center = cells[0]
+    hourly = {key: center["hourly"][key] for key in _CENTER_KEYS}
+    for key in _RING_MAX_KEYS:
+        series = [c["hourly"][key] for c in cells]
+        hourly[key] = [max(values) for values in zip(*series)]
+    return {
+        "utc_offset_seconds": center.get("utc_offset_seconds", 0),
+        "timezone": center.get("timezone"),
+        "timezone_abbreviation": center.get("timezone_abbreviation"),
+        "hourly": hourly,
+    }
+
+
 def _fetch_open_meteo(site: Site, forecast_days: int) -> dict:
+    coords = _neighbour_coords(site)
+    lats = ",".join(f"{la}" for la, _ in coords)
+    lons = ",".join(f"{lo}" for _, lo in coords)
     params = {
-        "latitude": site.latitude,
-        "longitude": site.longitude,
-        "elevation": site.elevation_m,
+        "latitude": lats,
+        "longitude": lons,
         "hourly": ",".join(
             [
                 "temperature_2m",
@@ -166,8 +223,9 @@ def _fetch_open_meteo(site: Site, forecast_days: int) -> dict:
         "models": "icon_seamless",
     }
     url = f"{OPEN_METEO_URL}?{urllib.parse.urlencode(params)}"
-    with urllib.request.urlopen(url, timeout=15) as resp:
-        return json.load(resp)
+    with urllib.request.urlopen(url, timeout=30) as resp:
+        cells = json.load(resp)
+    return _aggregate_cells(cells)
 
 
 def _site_timezone(payload: dict) -> tzinfo:

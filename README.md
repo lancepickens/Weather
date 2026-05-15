@@ -14,10 +14,30 @@ Each hour includes 2 m relative humidity, cloud cover by layer, and base
 height in meters AGL and MSL. The Note column flags `extinction` when
 the modeled cloud base sits at or below the site (observer in cloud),
 `below ridge` when the deck is below the site's local ridge (if
-configured), and `marine-layer risk` when surface RH exceeds 90 % even
-if cloud_cover reads 0 % — this catches grid-snap "dry island"
-artifacts at coastal/inland boundaries where the model places the site
-just above the marine layer.
+configured), and `marine-layer risk` when surface RH exceeds 90 %.
+
+### Neighbour-cell ring sampling
+
+Open-Meteo snaps each requested coordinate to a single ICON grid cell
+without interpolation, which on a coastal/inland boundary can land in
+an anomalous "dry island" cell while every neighbour within a few km
+is inside the marine layer. To avoid hiding that case behind a lucky
+single-cell snap, each forecast call fetches a 3×3 ring of cells
+(`±0.15°` around the configured coordinate, ≈17 km — large enough to
+guarantee distinct ICON cells in every direction) and aggregates them:
+
+- `temperature_2m`, `time`, `is_day` — taken from the center cell so
+  the site's point forecast remains the reference.
+- `dew_point_2m`, `relative_humidity_2m`, `cloud_cover` (and the low /
+  mid / high splits) — element-wise **max** across the ring,
+  computed independently per variable. The reported LCL is therefore
+  the lowest cloud base anywhere in the ring, and the `marine-layer
+  risk` / `extinction` flags fire as soon as any neighbour saturates.
+
+Because each variable's max can come from a different cell, the
+displayed `Td°C` may exceed the center `T°C` — in those cases the row
+represents three separate worst-case readings rather than a single
+self-consistent point forecast.
 
 The seed config ships with Henry W. Coe State Park; add more entries to
 `sites.json` as needed.
@@ -47,20 +67,6 @@ python3 cloud_height_predictor.py --help
 
 `ridge_height_m` is optional; omit it for sites without a meaningful
 local ridge.
-
-### Known limitation: single-cell grid snap
-
-Open-Meteo returns the value for the single ICON grid cell nearest the
-configured coordinate; it does not interpolate between cells. At sites
-that sit on a coastal/inland boundary or near a ridge (e.g. Henry Coe),
-the nearest cell can land on an anomalous "dry island" — high modeled
-elevation, low cloud cover, low RH — while every neighbour within a
-few km is inside the marine layer at 80–100 % cloud. The `marine-layer
-risk` note mitigates the soft version of this (humid air, no modeled
-cloud) but cannot catch the hard version where the snapped cell is dry
-*and* the neighbours are saturated. For sites near these boundaries,
-treat 0 % cloud / low RH readings with skepticism and cross-check
-against a tool that interpolates between cells.
 
 ### Tests (no network required)
 

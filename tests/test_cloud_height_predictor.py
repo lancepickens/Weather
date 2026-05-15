@@ -11,10 +11,13 @@ from pathlib import Path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
 
 from cloud_height_predictor import (  # noqa: E402
+    NEIGHBOUR_OFFSET_DEG,
     CloudHeightForecast,
     Site,
+    _aggregate_cells,
     _build_forecast,
     _group_into_nights,
+    _neighbour_coords,
     _site_timezone,
     cloud_base_height_msl_m,
     format_forecast,
@@ -247,6 +250,74 @@ def test_format_forecast_separates_multiple_nights():
     out = format_forecast([[n1], [n2]], HENRY_COE)
     assert "Night of 2026-05-14" in out
     assert "Night of 2026-05-15" in out
+
+
+def test_neighbour_coords_returns_center_first_and_eight_ring_cells():
+    coords = _neighbour_coords(HENRY_COE)
+    assert len(coords) == 9
+    assert coords[0] == (HENRY_COE.latitude, HENRY_COE.longitude)
+    # All non-center cells are exactly one offset away in lat or lon (or both).
+    for la, lo in coords[1:]:
+        dlat = la - HENRY_COE.latitude
+        dlon = lo - HENRY_COE.longitude
+        assert abs(abs(dlat) - NEIGHBOUR_OFFSET_DEG) < 1e-9 or abs(dlat) < 1e-9
+        assert abs(abs(dlon) - NEIGHBOUR_OFFSET_DEG) < 1e-9 or abs(dlon) < 1e-9
+        assert not (abs(dlat) < 1e-9 and abs(dlon) < 1e-9)  # center already at index 0
+
+
+def _make_cell(temp, dew, rh, cloud, low, mid, high, is_day=(0, 0)):
+    return {
+        "utc_offset_seconds": -25200,
+        "timezone_abbreviation": "PDT",
+        "timezone": "America/Los_Angeles",
+        "hourly": {
+            "time": ["2026-05-14T22:00", "2026-05-15T02:00"],
+            "temperature_2m": list(temp),
+            "dew_point_2m": list(dew),
+            "relative_humidity_2m": list(rh),
+            "cloud_cover": list(cloud),
+            "cloud_cover_low": list(low),
+            "cloud_cover_mid": list(mid),
+            "cloud_cover_high": list(high),
+            "is_day": list(is_day),
+        },
+    }
+
+
+def test_aggregate_cells_takes_center_for_T_time_isday():
+    center = _make_cell(temp=(10.0, 9.0), dew=(0.0, 0.0), rh=(50, 50),
+                        cloud=(0, 0), low=(0, 0), mid=(0, 0), high=(0, 0))
+    other = _make_cell(temp=(20.0, 19.0), dew=(15.0, 15.0), rh=(99, 99),
+                       cloud=(80, 80), low=(80, 80), mid=(0, 0), high=(0, 0))
+    out = _aggregate_cells([center, other])["hourly"]
+    assert out["temperature_2m"] == [10.0, 9.0]  # center
+    assert out["time"] == ["2026-05-14T22:00", "2026-05-15T02:00"]  # center
+    assert out["is_day"] == [0, 0]  # center
+
+
+def test_aggregate_cells_max_for_clouds_rh_dewpoint():
+    a = _make_cell(temp=(10.0, 10.0), dew=(-1.0, -1.0), rh=(45, 45),
+                   cloud=(0, 0), low=(0, 0), mid=(0, 0), high=(0, 0))
+    b = _make_cell(temp=(10.0, 10.0), dew=(9.5, 5.0), rh=(97, 70),
+                   cloud=(100, 30), low=(100, 0), mid=(0, 30), high=(0, 0))
+    c = _make_cell(temp=(10.0, 10.0), dew=(5.0, 8.0), rh=(70, 90),
+                   cloud=(50, 80), low=(50, 0), mid=(0, 0), high=(0, 80))
+    out = _aggregate_cells([a, b, c])["hourly"]
+    assert out["dew_point_2m"] == [9.5, 8.0]
+    assert out["relative_humidity_2m"] == [97, 90]
+    assert out["cloud_cover"] == [100, 80]
+    assert out["cloud_cover_low"] == [100, 0]
+    assert out["cloud_cover_mid"] == [0, 30]
+    assert out["cloud_cover_high"] == [0, 80]
+
+
+def test_aggregate_cells_preserves_top_level_timezone_fields():
+    out = _aggregate_cells([
+        _make_cell(temp=(10.0,), dew=(0.0,), rh=(50,), cloud=(0,), low=(0,),
+                   mid=(0,), high=(0,), is_day=(0,)),
+    ])
+    assert out["utc_offset_seconds"] == -25200
+    assert out["timezone_abbreviation"] == "PDT"
 
 
 def _make_hourly_payload(times, is_day, temp=15.0, dew=5.0, rh=50.0):
