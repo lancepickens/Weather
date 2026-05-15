@@ -149,6 +149,7 @@ def _fetch_open_meteo(site: Site, forecast_days: int) -> dict:
         "past_days": 1,
         "forecast_days": forecast_days,
         "timezone": "auto",
+        "models": "icon_seamless",
     }
     url = f"{OPEN_METEO_URL}?{urllib.parse.urlencode(params)}"
     with urllib.request.urlopen(url, timeout=15) as resp:

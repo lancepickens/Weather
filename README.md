@@ -6,8 +6,8 @@ Utilities for forecasting astronomical weather for amateur astronomers.
 
 `cloud_height_predictor.py` estimates cloud base height (the lifted
 condensation level) at any observing site listed in `sites.json`, using 2 m
-temperature and dewpoint from the Open-Meteo forecast API and Espy's
-equation (`H ≈ 125 × (T − Td)` meters). Output is restricted to
+temperature and dewpoint from DWD's ICON model via Open-Meteo
+(`models=icon_seamless`) and Espy's equation (`H ≈ 125 × (T − Td)` meters). Output is restricted to
 astronomical night hours (sunset to sunrise at the site's local
 coordinates) and shown in the site's local timezone, grouped per night.
 Each hour includes cloud cover by layer plus base height in meters AGL
