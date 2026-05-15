@@ -130,7 +130,7 @@ def _build_forecast(
     )
 
 
-def _fetch_open_meteo(site: Site, hours: int) -> dict:
+def _fetch_open_meteo(site: Site, forecast_days: int) -> dict:
     params = {
         "latitude": site.latitude,
         "longitude": site.longitude,
@@ -143,9 +143,11 @@ def _fetch_open_meteo(site: Site, hours: int) -> dict:
                 "cloud_cover_low",
                 "cloud_cover_mid",
                 "cloud_cover_high",
+                "is_day",
             ]
         ),
-        "forecast_days": max(1, (hours + 23) // 24),
+        "past_days": 1,
+        "forecast_days": forecast_days,
         "timezone": "auto",
     }
     url = f"{OPEN_METEO_URL}?{urllib.parse.urlencode(params)}"
@@ -159,20 +161,63 @@ def _site_timezone(payload: dict) -> tzinfo:
     return timezone(offset, name)
 
 
-def predict(site: Site, hours: int = 24) -> list[CloudHeightForecast]:
-    """Return hourly cloud-height forecasts for the given site in site-local time."""
-    data = _fetch_open_meteo(site, hours)
+def _group_into_nights(
+    hourly: dict,
+    tz: tzinfo,
+    nights: int,
+    now: datetime,
+) -> list[list[CloudHeightForecast]]:
+    """Group future hourly forecasts into contiguous night runs (is_day == 0)."""
+    groups: list[list[CloudHeightForecast]] = []
+    current: list[CloudHeightForecast] = []
+    for i in range(len(hourly["time"])):
+        t = datetime.fromisoformat(hourly["time"][i]).replace(tzinfo=tz)
+        if t < now:
+            continue
+        if hourly["is_day"][i] == 0:
+            current.append(_build_forecast(hourly, i, tz))
+        elif current:
+            groups.append(current)
+            if len(groups) >= nights:
+                return groups
+            current = []
+    if current and len(groups) < nights:
+        groups.append(current)
+    return groups[:nights]
+
+
+def predict(site: Site, nights: int = 1) -> list[list[CloudHeightForecast]]:
+    """Return hourly cloud-height forecasts grouped by upcoming night."""
+    data = _fetch_open_meteo(site, forecast_days=nights + 1)
     hourly = data["hourly"]
     tz = _site_timezone(data)
-    return [_build_forecast(hourly, i, tz) for i in range(min(hours, len(hourly["time"])))]
+    return _group_into_nights(hourly, tz, nights, datetime.now(tz))
 
 
-def format_forecast(forecasts: Iterable[CloudHeightForecast], site: Site) -> str:
-    forecasts = list(forecasts)
+def _night_label(night: list[CloudHeightForecast]) -> str:
+    """Label a night by the evening's local date (the date before sunrise)."""
+    last = night[-1].time
+    # A night ends at sunrise on the day after sunset. Subtract 12 h from the
+    # final hour to land squarely in the prior evening regardless of DST.
+    evening = last - timedelta(hours=12)
+    return evening.strftime("%Y-%m-%d")
+
+
+def format_forecast(
+    nights: Iterable[Iterable[CloudHeightForecast]], site: Site
+) -> str:
+    nights = [list(n) for n in nights if list(n)]
     ridge_note = (
         f", ridge {site.ridge_height_m:.0f} m" if site.ridge_height_m is not None else ""
     )
-    tz_label = forecasts[0].time.tzname() if forecasts else "UTC"
+    if not nights:
+        return (
+            f"Cloud base height forecast — {site.name} "
+            f"(lat {site.latitude}, lon {site.longitude}, "
+            f"elev {site.elevation_m:.0f} m MSL{ridge_note})\n\n"
+            "No upcoming night-hours available in the forecast window."
+        )
+    tz_label = nights[0][0].time.tzname() or "UTC"
     time_col = f"Time ({tz_label})"
     time_col_width = max(17, len(time_col))
     header = (
@@ -184,20 +229,24 @@ def format_forecast(forecasts: Iterable[CloudHeightForecast], site: Site) -> str
         f"{'Base m AGL':>11} {'Base m MSL':>11}  Note"
     )
     rows = [header]
-    for f in forecasts:
-        notes = []
-        if is_extinction(f, site):
-            notes.append("extinction")
-        if is_below_ridge(f, site):
-            notes.append("below ridge")
-        rows.append(
-            f"{f.time.strftime('%Y-%m-%d %H:%M'):<{time_col_width}} "
-            f"{f.temperature_c:>5.1f} {f.dewpoint_c:>5.1f} "
-            f"{f.cloud_cover_pct:>5.0f} {f.cloud_cover_low_pct:>5.0f} "
-            f"{f.cloud_cover_mid_pct:>5.0f} {f.cloud_cover_high_pct:>6.0f} "
-            f"{f.cloud_base_height_agl_m:>11.0f} "
-            f"{cloud_base_height_msl_m(f, site):>11.0f}  {', '.join(notes)}"
-        )
+    for i, night in enumerate(nights):
+        if i > 0:
+            rows.append("")
+        rows.append(f"-- Night of {_night_label(night)} (sunset → sunrise) --")
+        for f in night:
+            notes = []
+            if is_extinction(f, site):
+                notes.append("extinction")
+            if is_below_ridge(f, site):
+                notes.append("below ridge")
+            rows.append(
+                f"{f.time.strftime('%Y-%m-%d %H:%M'):<{time_col_width}} "
+                f"{f.temperature_c:>5.1f} {f.dewpoint_c:>5.1f} "
+                f"{f.cloud_cover_pct:>5.0f} {f.cloud_cover_low_pct:>5.0f} "
+                f"{f.cloud_cover_mid_pct:>5.0f} {f.cloud_cover_high_pct:>6.0f} "
+                f"{f.cloud_base_height_agl_m:>11.0f} "
+                f"{cloud_base_height_msl_m(f, site):>11.0f}  {', '.join(notes)}"
+            )
     return "\n".join(rows)
 
 
@@ -222,14 +271,14 @@ def _build_arg_parser():
         prog="cloud_height_predictor",
         description=(
             "Predict cloud base height (LCL) at a configured observing site using "
-            "Open-Meteo forecasts. Useful as one input to a broader astronomical "
-            "weather forecast."
+            "Open-Meteo forecasts. Output covers only astronomical night hours "
+            "(sunset to sunrise) at the site's local coordinates."
         ),
         epilog=(
             "Examples:\n"
             "  cloud_height_predictor --list-sites\n"
             "  cloud_height_predictor --site henry-coe\n"
-            "  cloud_height_predictor --site henry-coe --hours 12\n"
+            "  cloud_height_predictor --site henry-coe --nights 3\n"
             "  cloud_height_predictor --config /path/to/sites.json --site henry-coe"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -245,11 +294,11 @@ def _build_arg_parser():
         help="Print the configured sites and exit.",
     )
     parser.add_argument(
-        "--hours",
+        "--nights",
         type=int,
-        default=24,
+        default=1,
         metavar="N",
-        help="Number of forecast hours to print (default: %(default)s).",
+        help="Number of upcoming nights to forecast (default: %(default)s).",
     )
     parser.add_argument(
         "--config",
@@ -288,8 +337,12 @@ def main(argv: list[str] | None = None) -> int:
         print(format_site_list(sites), file=sys.stderr)
         return 2
 
+    if args.nights < 1:
+        print("error: --nights must be >= 1.", file=sys.stderr)
+        return 2
+
     site = sites[args.site]
-    print(format_forecast(predict(site, args.hours), site))
+    print(format_forecast(predict(site, args.nights), site))
     return 0
 
 

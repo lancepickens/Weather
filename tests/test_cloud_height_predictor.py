@@ -14,6 +14,7 @@ from cloud_height_predictor import (  # noqa: E402
     CloudHeightForecast,
     Site,
     _build_forecast,
+    _group_into_nights,
     _site_timezone,
     cloud_base_height_msl_m,
     format_forecast,
@@ -85,7 +86,7 @@ def test_no_extinction_when_cloud_base_above_site():
 
 
 def test_format_forecast_flags_extinction_note():
-    out = format_forecast([_forecast(10.0, 10.0)], HENRY_COE)
+    out = format_forecast([[_forecast(10.0, 10.0)]], HENRY_COE)
     assert "extinction" in out
 
 
@@ -165,17 +166,127 @@ def test_format_forecast_shows_local_timezone_in_header():
         cloud_cover_high_pct=10.0,
         cloud_base_height_agl_m=lifted_condensation_level_m(18.0, 8.0),
     )
-    out = format_forecast([local_forecast], HENRY_COE)
+    out = format_forecast([[local_forecast]], HENRY_COE)
     assert "Time (PDT)" in out
     assert "2026-05-09 20:00" in out
 
 
 def test_format_forecast_includes_site_header_and_rows():
-    out = format_forecast([_forecast(18.0, 8.0)], HENRY_COE)
+    out = format_forecast([[_forecast(18.0, 8.0)]], HENRY_COE)
     assert "Henry W. Coe State Park" in out
     assert "ridge 1000" in out
     assert "2026-05-09 00:00" in out
     assert "1250" in out  # AGL
+    assert "Night of" in out
+
+
+def test_format_forecast_empty_when_no_nights():
+    out = format_forecast([], HENRY_COE)
+    assert "Henry W. Coe State Park" in out
+    assert "No upcoming night-hours" in out
+
+
+def test_format_forecast_separates_multiple_nights():
+    pdt = timezone(timedelta(hours=-7), "PDT")
+    n1 = CloudHeightForecast(
+        time=datetime(2026, 5, 14, 22, 0, tzinfo=pdt),
+        temperature_c=15.0,
+        dewpoint_c=5.0,
+        cloud_cover_pct=20.0,
+        cloud_cover_low_pct=5.0,
+        cloud_cover_mid_pct=10.0,
+        cloud_cover_high_pct=5.0,
+        cloud_base_height_agl_m=lifted_condensation_level_m(15.0, 5.0),
+    )
+    n2 = CloudHeightForecast(
+        time=datetime(2026, 5, 15, 22, 0, tzinfo=pdt),
+        temperature_c=15.0,
+        dewpoint_c=5.0,
+        cloud_cover_pct=20.0,
+        cloud_cover_low_pct=5.0,
+        cloud_cover_mid_pct=10.0,
+        cloud_cover_high_pct=5.0,
+        cloud_base_height_agl_m=lifted_condensation_level_m(15.0, 5.0),
+    )
+    out = format_forecast([[n1], [n2]], HENRY_COE)
+    assert "Night of 2026-05-14" in out
+    assert "Night of 2026-05-15" in out
+
+
+def _make_hourly_payload(times, is_day, temp=15.0, dew=5.0):
+    n = len(times)
+    return {
+        "time": times,
+        "temperature_2m": [temp] * n,
+        "dew_point_2m": [dew] * n,
+        "cloud_cover": [30] * n,
+        "cloud_cover_low": [10] * n,
+        "cloud_cover_mid": [10] * n,
+        "cloud_cover_high": [10] * n,
+        "is_day": is_day,
+    }
+
+
+def test_group_into_nights_skips_past_hours():
+    tz = timezone(timedelta(hours=-7), "PDT")
+    hourly = _make_hourly_payload(
+        times=[
+            "2026-05-14T18:00",
+            "2026-05-14T19:00",  # night, but in the past
+            "2026-05-14T20:00",  # night, future
+            "2026-05-14T21:00",  # night, future
+        ],
+        is_day=[1, 0, 0, 0],
+    )
+    now = datetime(2026, 5, 14, 19, 30, tzinfo=tz)
+    groups = _group_into_nights(hourly, tz, nights=1, now=now)
+    assert len(groups) == 1
+    assert [f.time.hour for f in groups[0]] == [20, 21]
+
+
+def test_group_into_nights_separates_runs_by_daytime():
+    tz = timezone(timedelta(hours=-7), "PDT")
+    times = [
+        "2026-05-14T20:00", "2026-05-14T21:00",  # night 1
+        "2026-05-15T08:00", "2026-05-15T12:00",  # day
+        "2026-05-15T20:00", "2026-05-15T21:00",  # night 2
+    ]
+    is_day = [0, 0, 1, 1, 0, 0]
+    now = datetime(2026, 5, 14, 18, 0, tzinfo=tz)
+    groups = _group_into_nights(_make_hourly_payload(times, is_day), tz, nights=2, now=now)
+    assert len(groups) == 2
+    assert [f.time.hour for f in groups[0]] == [20, 21]
+    assert [f.time.day for f in groups[1]] == [15, 15]
+
+
+def test_group_into_nights_caps_to_requested_count():
+    tz = timezone(timedelta(hours=-7), "PDT")
+    times = [
+        "2026-05-14T20:00",
+        "2026-05-15T08:00",
+        "2026-05-15T20:00",
+        "2026-05-16T08:00",
+        "2026-05-16T20:00",
+    ]
+    is_day = [0, 1, 0, 1, 0]
+    now = datetime(2026, 5, 14, 18, 0, tzinfo=tz)
+    groups = _group_into_nights(_make_hourly_payload(times, is_day), tz, nights=1, now=now)
+    assert len(groups) == 1
+    assert groups[0][0].time.day == 14
+
+
+def test_group_into_nights_handles_trailing_partial_night():
+    tz = timezone(timedelta(hours=-7), "PDT")
+    times = [
+        "2026-05-14T20:00",
+        "2026-05-14T21:00",
+        "2026-05-14T22:00",
+    ]
+    is_day = [0, 0, 0]
+    now = datetime(2026, 5, 14, 18, 0, tzinfo=tz)
+    groups = _group_into_nights(_make_hourly_payload(times, is_day), tz, nights=1, now=now)
+    assert len(groups) == 1
+    assert len(groups[0]) == 3
 
 
 def test_load_sites_parses_config():
