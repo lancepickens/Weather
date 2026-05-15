@@ -48,6 +48,20 @@ python3 cloud_height_predictor.py --help
 `ridge_height_m` is optional; omit it for sites without a meaningful
 local ridge.
 
+### Known limitation: single-cell grid snap
+
+Open-Meteo returns the value for the single ICON grid cell nearest the
+configured coordinate; it does not interpolate between cells. At sites
+that sit on a coastal/inland boundary or near a ridge (e.g. Henry Coe),
+the nearest cell can land on an anomalous "dry island" — high modeled
+elevation, low cloud cover, low RH — while every neighbour within a
+few km is inside the marine layer at 80–100 % cloud. The `marine-layer
+risk` note mitigates the soft version of this (humid air, no modeled
+cloud) but cannot catch the hard version where the snapped cell is dry
+*and* the neighbours are saturated. For sites near these boundaries,
+treat 0 % cloud / low RH readings with skepticism and cross-check
+against a tool that interpolates between cells.
+
 ### Tests (no network required)
 
 ```sh
