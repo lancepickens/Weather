@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Weather — Project Architecture</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Weather</h1>
+    <p class="subtitle">Astronomical weather forecasting, calibrated against webcam ground truth</p>
+    <nav>
+      <a href="index.html" class="active">Overview</a>
+      <a href="webcam_analyzer.html">Webcam Analyzer</a>
+    </nav>
+  </header>
+
+  <main>
+    <h2>What this project is</h2>
+    <p>
+      Two coupled command-line tools that together produce — and validate —
+      a per-hour cloud forecast for an amateur-astronomy observing site.
+      The default site is Henry W. Coe State Park (793&nbsp;m, on the Bay Area
+      marine-layer ceiling), but anything in <code>sites.json</code> works.
+    </p>
+
+    <table>
+      <thead>
+        <tr><th>Tool</th><th>Role</th><th>Where</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>cloud_height_predictor.py</code></td>
+          <td>Pulls DWD ICON forecast data via Open-Meteo, computes the
+              cloud base, restricts to astronomical night, and emits a
+              per-hour table with flags.</td>
+          <td>repo root</td>
+        </tr>
+        <tr>
+          <td><code>webcam_analyzer/</code></td>
+          <td>Pip-installable subproject. Downloads AlertCalifornia
+              webcam frames, counts catalog stars actually visible in
+              each frame, and reports an hourly cloud score. Used as
+              <em>ground truth</em> to calibrate the predictor.</td>
+          <td><code>webcam_analyzer/</code></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>The data flow</h2>
+    <figure>
+      <svg viewBox="0 0 760 380" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="High-level data flow diagram">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a"/>
+          </marker>
+          <marker id="arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#b3541e"/>
+          </marker>
+        </defs>
+        <style>
+          .lbl { font: 12px -apple-system, "SF Pro Text", sans-serif; fill: #1a1a1a; }
+          .lbl-sm { font: 10.5px "SF Mono", Menlo, monospace; fill: #6a6a6a; }
+          .box  { fill: #fff4eb; stroke: #b3541e; stroke-width: 1.5; rx: 5; }
+          .box-ext { fill: #f1eee8; stroke: #6a6a6a; stroke-width: 1.5; rx: 5; }
+          .box-out { fill: #ebf5ed; stroke: #2c7a3a; stroke-width: 1.5; rx: 5; }
+          .line { stroke: #1a1a1a; stroke-width: 1.5; fill: none; }
+          .line-accent { stroke: #b3541e; stroke-width: 1.5; stroke-dasharray: 5,3; fill: none; }
+        </style>
+
+        <!-- Top row: external data sources -->
+        <rect class="box-ext" x="40"  y="20" width="180" height="55"/>
+        <text class="lbl" x="130" y="42" text-anchor="middle">Open-Meteo</text>
+        <text class="lbl-sm" x="130" y="60" text-anchor="middle">DWD ICON model</text>
+
+        <rect class="box-ext" x="540" y="20" width="180" height="55"/>
+        <text class="lbl" x="630" y="42" text-anchor="middle">AlertCalifornia</text>
+        <text class="lbl-sm" x="630" y="60" text-anchor="middle">cameras.alertcalifornia.org</text>
+
+        <!-- Middle row: tools -->
+        <rect class="box" x="40"  y="140" width="180" height="75"/>
+        <text class="lbl" x="130" y="167" text-anchor="middle" font-weight="600">cloud_height_predictor</text>
+        <text class="lbl-sm" x="130" y="184" text-anchor="middle">3×3 ring sampling</text>
+        <text class="lbl-sm" x="130" y="200" text-anchor="middle">LCL + flag rules</text>
+
+        <rect class="box" x="540" y="140" width="180" height="75"/>
+        <text class="lbl" x="630" y="167" text-anchor="middle" font-weight="600">webcam_analyzer</text>
+        <text class="lbl-sm" x="630" y="184" text-anchor="middle">fetch → calibrate → analyze</text>
+        <text class="lbl-sm" x="630" y="200" text-anchor="middle">stars detected ÷ predicted</text>
+
+        <!-- Bottom row: outputs -->
+        <rect class="box-out" x="40"  y="285" width="180" height="55"/>
+        <text class="lbl" x="130" y="307" text-anchor="middle">Per-hour forecast</text>
+        <text class="lbl-sm" x="130" y="325" text-anchor="middle">stdout (local TZ, nights)</text>
+
+        <rect class="box-out" x="540" y="285" width="180" height="55"/>
+        <text class="lbl" x="630" y="307" text-anchor="middle">hourly.csv</text>
+        <text class="lbl-sm" x="630" y="325" text-anchor="middle">cloud_score per UTC hour</text>
+
+        <!-- Vertical arrows -->
+        <line class="line" x1="130" y1="78"  x2="130" y2="138" marker-end="url(#arrow)"/>
+        <line class="line" x1="130" y1="218" x2="130" y2="283" marker-end="url(#arrow)"/>
+        <line class="line" x1="630" y1="78"  x2="630" y2="138" marker-end="url(#arrow)"/>
+        <line class="line" x1="630" y1="218" x2="630" y2="283" marker-end="url(#arrow)"/>
+
+        <!-- Feedback arrow: analyzer → predictor calibration -->
+        <path class="line-accent"
+              d="M 540 177 L 380 177 L 380 247 L 220 247"
+              marker-end="url(#arrow-accent)"/>
+        <text class="lbl" x="380" y="240" text-anchor="middle" fill="#b3541e" font-style="italic">
+          ground truth → tunes thresholds
+        </text>
+      </svg>
+      <figcaption>Two parallel pipelines. Solid arrows are runtime data flow.
+        The dashed orange line is the offline feedback loop: the analyzer's
+        cloud score is what calibrated the predictor's <code>marine layer below</code> thresholds.</figcaption>
+    </figure>
+
+    <h2>Why two tools, not one</h2>
+    <p>
+      The original predictor consulted a single ICON grid cell at the
+      observing coordinates. On the night of 2026-05-14 it reported clear
+      skies, while Astrospheric (same ICON source) showed 100% cloud cover
+      at the same coordinates. The reason was a known artifact: Open-Meteo
+      snaps each requested point to one ~13 km grid cell with no
+      interpolation, and at coastal/inland boundaries that single cell can
+      land in an anomalous "dry island" while every neighbour is socked in.
+    </p>
+    <p>
+      A 3×3 neighbour-ring fix (described on this page below) eliminated
+      the false-clear case but introduced the opposite false-overcast case
+      at marine-layer-ceiling sites like Coe. To break that tie a
+      <em>physical ground truth</em> was needed — somewhere the actual sky
+      can be observed. That's what the webcam analyzer provides.
+    </p>
+
+    <h2>The predictor</h2>
+
+    <h3>Ring-max aggregation</h3>
+    <p>
+      <code>cloud_height_predictor.py</code> fetches a 3×3 neighbour ring
+      around the configured coordinate at offsets of ±0.15° (≈17 km, large
+      enough to guarantee distinct ICON cells in every direction). RH,
+      dewpoint, and cloud-cover (with low/mid/high splits) are taken as
+      the <strong>element-wise max</strong> across the ring; temperature
+      and <code>is_day</code> come from the center cell. The displayed
+      <code>Td</code> may exceed the center <code>T</code> — that's
+      intentional; the row represents three separate worst-case readings
+      rather than one self-consistent point forecast.
+    </p>
+
+    <div class="ascii">           Δlat = +0.15°
+           ┌─────┬─────┬─────┐
+           │  ·  │  ·  │  ·  │      max-aggregated:
+           ├─────┼─────┼─────┤        relative_humidity_2m
+  Δlon →   │  ·  │  ★  │  ·  │        dew_point_2m
+           ├─────┼─────┼─────┤        cloud_cover{_low,_mid,_high}
+           │  ·  │  ·  │  ·  │
+           └─────┴─────┴─────┘
+                                    center-only (preserved):
+           Δlat = -0.15°              temperature_2m, is_day, time</div>
+
+    <h3>Flags</h3>
+    <p>The predictor emits up to four flags per hour. They are not
+       mutually exclusive — the <code>marine layer below</code> flag
+       exists specifically to <em>reinterpret</em> the conservative
+       flags rather than override them.</p>
+
+    <table>
+      <thead>
+        <tr><th>Flag</th><th>Source</th><th>Meaning</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="flag-bad">extinction</span></td>
+          <td>ring-max LCL ≤ site elevation</td>
+          <td>Cloud base sits at or below observer height somewhere in the ring.</td>
+        </tr>
+        <tr>
+          <td><span class="flag-warn">below ridge</span></td>
+          <td>ring-max LCL ≤ <code>ridge_height_m</code></td>
+          <td>Deck obscures the configured local horizon.</td>
+        </tr>
+        <tr>
+          <td><span class="flag-warn">marine-layer risk</span></td>
+          <td>ring-max RH &gt; 90 %</td>
+          <td>Saturated air anywhere in the ring.</td>
+        </tr>
+        <tr>
+          <td><span class="flag-good">marine layer below</span></td>
+          <td>center RH &lt; 70 %  <em>and</em>  center cover &lt; 30 %  <em>and</em>  ring RH &gt; 90 %</td>
+          <td>Site sits at an inversion top: ring is socked in but the configured point is dry/clear.
+              Conditions overhead are likely good.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="callout">
+      <div class="callout-title">Calibration source</div>
+      <p>The thresholds <code>UNDERCAST_CENTER_RH_MAX_PCT = 70</code> and
+         <code>UNDERCAST_CENTER_COVER_MAX_PCT = 30</code> were set against
+         the 2026-05-14/15 webcam capture at Coe: ring flagged full
+         extinction every hour while the Axis-StarrCanyon1 camera (at the
+         same elevation) confirmed clear skies overhead.</p>
+    </div>
+
+    <h2>The webcam analyzer</h2>
+    <p>The analyzer turns a 12-hour overnight timelapse into an hourly
+       cloud score by counting stars that should be visible against stars
+       that actually <em>are</em>. It runs as three CLIs because the slow
+       parts shouldn't repeat:</p>
+
+    <ul>
+      <li><code>webcam-fetch</code> — download a rolling timelapse manifest.</li>
+      <li><code>webcam-calibrate</code> — plate-solve once, reuse forever (the cam is fixed-pointing).</li>
+      <li><code>webcam-analyze</code> — per-frame star detection vs catalog prediction.</li>
+    </ul>
+
+    <p>The full pipeline, including how a 65° FOV is solved with
+       astrometry.net indices that only cover 5–8°, lives on its own
+       page:
+       <a href="webcam_analyzer.html">→ Webcam Analyzer architecture</a>.</p>
+
+    <h2>Running it</h2>
+    <pre><code># Forecast
+./hc_cloud_forecast.sh                          # Henry Coe wrapper
+python3 cloud_height_predictor.py --site henry-coe --nights 3
+
+# Webcam ground truth — fetch + calibrate + analyze
+./webcam_analyzer/run.sh                        # one-shot
+./webcam_analyzer/run.sh --skip-fetch           # re-analyze cached frames
+./webcam_analyzer/run.sh --recalibrate          # force new plate-solve</code></pre>
+  </main>
+
+  <footer>
+    Repository: <code>github.com/lancepickens/Weather</code>
+  </footer>
+</body>
+</html>

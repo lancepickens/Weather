@@ -1,0 +1,219 @@
+:root {
+  --bg: #fafaf7;
+  --fg: #1a1a1a;
+  --muted: #6a6a6a;
+  --accent: #b3541e;
+  --accent-bg: #fff4eb;
+  --rule: #e1ddd5;
+  --code-bg: #f1eee8;
+  --link: #205c87;
+  --good: #2c7a3a;
+  --warn: #b56b00;
+  --bad: #a02828;
+}
+
+* { box-sizing: border-box; }
+
+html { background: var(--bg); }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue",
+               "Segoe UI", Roboto, sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+  color: var(--fg);
+  background: var(--bg);
+  margin: 0;
+  padding: 0;
+}
+
+header {
+  border-bottom: 1px solid var(--rule);
+  padding: 2.5rem 1.5rem 1.5rem;
+  max-width: 920px;
+  margin: 0 auto;
+}
+
+header h1 {
+  font-size: 2rem;
+  margin: 0;
+  letter-spacing: -0.02em;
+}
+
+header .subtitle {
+  margin: 0.25rem 0 1rem;
+  color: var(--muted);
+  font-size: 1.05rem;
+}
+
+nav {
+  display: flex;
+  gap: 1.25rem;
+  font-size: 0.95rem;
+}
+
+nav a {
+  color: var(--link);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+}
+
+nav a:hover { border-bottom-color: var(--link); }
+
+nav a.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+main {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem 4rem;
+}
+
+h2 {
+  font-size: 1.5rem;
+  margin: 3rem 0 0.75rem;
+  letter-spacing: -0.01em;
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 0.35rem;
+}
+
+h2:first-of-type { margin-top: 1rem; }
+
+h3 {
+  font-size: 1.15rem;
+  margin: 2rem 0 0.5rem;
+  color: var(--accent);
+}
+
+p, ul, ol { margin: 0.75rem 0; }
+
+ul, ol { padding-left: 1.5rem; }
+
+li { margin: 0.25rem 0; }
+
+a { color: var(--link); }
+
+code {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.9em;
+  background: var(--code-bg);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+}
+
+pre {
+  background: var(--code-bg);
+  padding: 0.85rem 1rem;
+  border-radius: 5px;
+  overflow-x: auto;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  border: 1px solid var(--rule);
+}
+
+pre code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}
+
+table {
+  border-collapse: collapse;
+  margin: 1rem 0;
+  font-size: 0.92rem;
+  width: 100%;
+}
+
+th, td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: top;
+}
+
+th {
+  background: var(--code-bg);
+  font-weight: 600;
+}
+
+.callout {
+  background: var(--accent-bg);
+  border-left: 3px solid var(--accent);
+  padding: 0.75rem 1rem;
+  margin: 1.25rem 0;
+  border-radius: 0 4px 4px 0;
+}
+
+.callout p:first-child { margin-top: 0; }
+.callout p:last-child { margin-bottom: 0; }
+
+.callout-title {
+  font-weight: 600;
+  color: var(--accent);
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 0.25rem;
+}
+
+figure {
+  margin: 1.5rem 0;
+  text-align: center;
+}
+
+figure svg {
+  max-width: 100%;
+  height: auto;
+}
+
+figcaption {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-top: 0.5rem;
+  font-style: italic;
+}
+
+.flag-good { color: var(--good); font-weight: 600; }
+.flag-warn { color: var(--warn); font-weight: 600; }
+.flag-bad  { color: var(--bad);  font-weight: 600; }
+
+footer {
+  border-top: 1px solid var(--rule);
+  margin-top: 4rem;
+  padding: 1.5rem;
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--muted);
+  max-width: 920px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* Pipeline diagram blocks */
+.stage {
+  display: inline-block;
+  padding: 0.4rem 0.8rem;
+  border: 1.5px solid var(--accent);
+  background: var(--accent-bg);
+  border-radius: 4px;
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 0.85rem;
+}
+
+.stage-input  { border-color: var(--muted); background: var(--code-bg); }
+.stage-output { border-color: var(--good);  background: #ebf5ed; }
+
+/* ASCII art container */
+.ascii {
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 0.78rem;
+  line-height: 1.3;
+  white-space: pre;
+  background: var(--code-bg);
+  padding: 1rem;
+  border-radius: 5px;
+  border: 1px solid var(--rule);
+  overflow-x: auto;
+}

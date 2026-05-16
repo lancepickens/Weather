@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Webcam Analyzer — Architecture</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Webcam Analyzer</h1>
+    <p class="subtitle">Per-frame cloud cover from catalog stars detected vs predicted</p>
+    <nav>
+      <a href="index.html">Overview</a>
+      <a href="webcam_analyzer.html" class="active">Webcam Analyzer</a>
+    </nav>
+  </header>
+
+  <main>
+    <h2>What it does in one paragraph</h2>
+    <p>
+      For each frame of a 12-hour overnight timelapse from a fixed-pointing
+      AlertCalifornia camera, the analyzer (1) corrects small PTZ drift
+      against a reference frame, (2) projects every above-horizon catalog
+      star to its expected pixel coordinates at that frame's timestamp,
+      and (3) checks each predicted position for a real point source.
+      The per-frame ratio <code>detected / expected</code> rolls up to an
+      hourly cloud score: <strong>0 = clear, 1 = overcast</strong>.
+    </p>
+
+    <h2>Pipeline</h2>
+    <figure>
+      <svg viewBox="0 0 880 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Webcam analyzer pipeline">
+        <defs>
+          <marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a"/>
+          </marker>
+        </defs>
+        <style>
+          .lbl { font: 12px -apple-system, "SF Pro Text", sans-serif; fill: #1a1a1a; }
+          .lbl-sm { font: 10.5px "SF Mono", Menlo, monospace; fill: #6a6a6a; }
+          .lbl-stage { font: 13px "SF Mono", Menlo, monospace; fill: #1a1a1a; font-weight: 600; }
+          .box  { fill: #fff4eb; stroke: #b3541e; stroke-width: 1.5; rx: 5; }
+          .box-art { fill: #f1eee8; stroke: #6a6a6a; stroke-width: 1; rx: 4; }
+          .box-out { fill: #ebf5ed; stroke: #2c7a3a; stroke-width: 1.5; rx: 5; }
+          .line { stroke: #1a1a1a; stroke-width: 1.5; fill: none; }
+        </style>
+
+        <!-- Stage boxes -->
+        <rect class="box" x="20"  y="80" width="170" height="60"/>
+        <text class="lbl-stage" x="105" y="105" text-anchor="middle">webcam-fetch</text>
+        <text class="lbl-sm" x="105" y="125" text-anchor="middle">AlertCalifornia API</text>
+
+        <rect class="box" x="260" y="80" width="170" height="60"/>
+        <text class="lbl-stage" x="345" y="105" text-anchor="middle">webcam-calibrate</text>
+        <text class="lbl-sm" x="345" y="125" text-anchor="middle">solve-field + horizon</text>
+
+        <rect class="box" x="500" y="80" width="170" height="60"/>
+        <text class="lbl-stage" x="585" y="105" text-anchor="middle">webcam-analyze</text>
+        <text class="lbl-sm" x="585" y="125" text-anchor="middle">score every frame</text>
+
+        <!-- Output -->
+        <rect class="box-out" x="730" y="80" width="130" height="60"/>
+        <text class="lbl-stage" x="795" y="105" text-anchor="middle" font-size="12">hourly.csv</text>
+        <text class="lbl-sm" x="795" y="125" text-anchor="middle">cloud_score/hr</text>
+
+        <!-- Artifacts above stages -->
+        <rect class="box-art" x="40"  y="20" width="130" height="40"/>
+        <text class="lbl-sm" x="105" y="36" text-anchor="middle" fill="#1a1a1a">.frames-cache/</text>
+        <text class="lbl-sm" x="105" y="50" text-anchor="middle">*.jpg @ 1/min</text>
+
+        <rect class="box-art" x="280" y="20" width="130" height="40"/>
+        <text class="lbl-sm" x="345" y="36" text-anchor="middle" fill="#1a1a1a">calibration.json</text>
+        <text class="lbl-sm" x="345" y="50" text-anchor="middle">WCS + horizon</text>
+
+        <rect class="box-art" x="520" y="20" width="130" height="40"/>
+        <text class="lbl-sm" x="585" y="36" text-anchor="middle" fill="#1a1a1a">FrameScore[]</text>
+        <text class="lbl-sm" x="585" y="50" text-anchor="middle">in-memory</text>
+
+        <!-- Horizontal arrows between stages -->
+        <line class="line" x1="190" y1="110" x2="258" y2="110" marker-end="url(#arrow2)"/>
+        <line class="line" x1="430" y1="110" x2="498" y2="110" marker-end="url(#arrow2)"/>
+        <line class="line" x1="670" y1="110" x2="728" y2="110" marker-end="url(#arrow2)"/>
+
+        <!-- Artifact arrows (down into stages) -->
+        <line class="line" x1="105" y1="60" x2="105" y2="78" marker-end="url(#arrow2)"/>
+        <line class="line" x1="345" y1="60" x2="345" y2="78" marker-end="url(#arrow2)"/>
+        <line class="line" x1="585" y1="60" x2="585" y2="78" marker-end="url(#arrow2)"/>
+
+        <!-- frames-cache is also read by analyze: -->
+        <path class="line" d="M 105 17 L 105 5 L 585 5 L 585 17"/>
+        <line class="line" x1="585" y1="5" x2="585" y2="20" stroke-dasharray="3,2"/>
+
+        <!-- Persistence row -->
+        <text class="lbl" x="20" y="180" font-size="11" fill="#6a6a6a">Persistence:</text>
+        <text class="lbl" x="105" y="180" text-anchor="middle" font-size="11" fill="#6a6a6a">per-run (cache)</text>
+        <text class="lbl" x="345" y="180" text-anchor="middle" font-size="11" fill="#6a6a6a">once per cam pointing</text>
+        <text class="lbl" x="585" y="180" text-anchor="middle" font-size="11" fill="#6a6a6a">per-run (CSV)</text>
+        <text class="lbl" x="795" y="180" text-anchor="middle" font-size="11" fill="#6a6a6a">per-run</text>
+      </svg>
+      <figcaption>Three CLIs, three artifact tiers. <code>.frames-cache/</code> is fed by fetch and read by both calibrate and analyze; <code>calibration.json</code> is written once and read by every analyze run.</figcaption>
+    </figure>
+
+    <p>The three stages are separate processes — not one combined command —
+       because each has a very different cost and re-run cadence:</p>
+
+    <table>
+      <thead>
+        <tr><th>Stage</th><th>Cost</th><th>When to re-run</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>fetch</code></td>     <td>~210 MB / 12 hours (network-bound)</td><td>Each new night</td></tr>
+        <tr><td><code>calibrate</code></td> <td>~30 s plate-solve (CPU-bound, local astrometry.net)</td><td>Only when the cam is repositioned</td></tr>
+        <tr><td><code>analyze</code></td>   <td>~0.1 s/frame (~70 s for 12 hours of 1-min frames)</td><td>Whenever you want a new score, or re-tune detection thresholds</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Stage 1 — <code>webcam-fetch</code></h2>
+    <p>
+      AlertCalifornia exposes timelapse pools at fixed temporal
+      resolutions (<code>10sec</code>, <code>1min</code>, …) under
+      <code>cameras.alertcalifornia.org/public-camera-data</code>. The URL
+      shape was reverse-engineered from the public viewer; the
+      <code>WINDOW_TO_POOL</code> map in <code>fetch.py</code> picks the
+      right pool for each requested window so that a 12-hour overnight
+      fits in roughly 720 frames.
+    </p>
+    <p>Each downloaded JPEG is cached by its Unix-timestamp filename in
+       <code>.frames-cache/&lt;camera-id&gt;/&lt;pool&gt;/&lt;ts&gt;.jpg</code>,
+       so subsequent runs only fetch new frames at the head of the manifest.</p>
+
+    <h2>Stage 2 — <code>webcam-calibrate</code></h2>
+    <p>Two artifacts are produced and stored in <code>calibration.json</code>:</p>
+    <ol>
+      <li><strong>A per-column horizon row</strong> (<code>horizon_y[x]</code>),
+          so the analyzer knows which pixels are sky and which are foreground.</li>
+      <li><strong>A WCS solution</strong> mapping (RA, Dec) → (pixel x, y) for any catalog star.</li>
+    </ol>
+
+    <h3>Horizon segmentation</h3>
+    <p>
+      <code>segment_horizon()</code> takes a vertical Sobel response on a
+      mildly-blurred grayscale image (the horizon is the strongest
+      consistent vertical gradient in this scene). For each column it
+      picks the strongest gradient row, then applies a per-column median
+      filter to suppress single-column outliers. The output is a length-W
+      integer array <code>horizon_y</code> giving, for each pixel column,
+      the row of the horizon line.
+    </p>
+
+    <h3>Crop-and-solve: working around the index range</h3>
+    <p>
+      The Axis-StarrCanyon1 camera has a <strong>~65° FOV</strong>.
+      Astrometry.net's default <code>index-4115</code> series only solves
+      scale ranges up to roughly 5–8°. Feeding the full frame to
+      <code>solve-field</code> reliably fails.
+    </p>
+    <p>
+      The workaround is in <code>calibrate.run_solve_field()</code>:
+      crop a 200×200 patch from the center (<code>DEFAULT_CROP = (860, 100, 200, 200)</code>)
+      and solve only that patch with <code>--scale-low 5 --scale-high 8</code>.
+      Then translate the solved WCS back to full-frame coordinates by
+      shifting <code>CRPIX1</code>/<code>CRPIX2</code> by the crop offset
+      (<code>_wcs_with_full_frame_offset</code>).
+    </p>
+
+    <div class="ascii">                full frame 1920 × 1080
+       ┌─────────────────────────────────────────┐
+       │                                         │
+       │           ┌─────────┐  ← crop (860,100, │
+       │           │  200×   │       200,200)    │
+       │           │  200    │                   │
+       │           └─────────┘                   │
+       │                                         │
+       └─────────────────────────────────────────┘
+         solve-field on the crop  (5°–8° scale, fits indices)
+                       │
+                       ▼
+         WCS for crop space   ──── shift CRPIX by (-860, -100) ───▶  WCS for full-frame space</div>
+
+    <div class="callout">
+      <div class="callout-title">Pitfall: NAXIS in WCS headers</div>
+      <p>
+        <code>_parse_wcs_fits</code> reads only the listed <code>float_keys</code>
+        and <code>str_keys</code>. It deliberately skips
+        <code>NAXIS</code>/<code>NAXIS1</code>/<code>NAXIS2</code> —
+        coercing them to <code>float</code> triggers
+        <code>ValueError: Unknown format code 'd' for object of type 'float'</code>
+        deep inside <code>astropy.wcs.WCS</code>.
+      </p>
+    </div>
+
+    <h2>Stage 3 — <code>webcam-analyze</code></h2>
+    <p>Per frame, <code>score_frame()</code> runs four steps:</p>
+
+    <h3>1. Foreground drift correction</h3>
+    <p>
+      <code>estimate_drift()</code> cross-correlates only the
+      <em>below-horizon</em> region of the current frame against the
+      reference (and only the central 60% of width, to skip edge
+      artifacts and shrink the workload). Sky pixels deliberately do not
+      participate — stars rotate sidereally over a 12-hour window, and
+      including them would bias the correlation toward sidereal motion
+      rather than the mechanical PTZ drift we want to recover.
+    </p>
+    <p>
+      The correlation is a hand-rolled nested loop over a small
+      <code>±20</code> px search window, not <code>scipy.signal.correlate2d</code>
+      — for this band size the full FFT-based correlation is much more
+      expensive than the windowed dot product.
+    </p>
+
+    <h3>2. Catalog prediction</h3>
+    <p>
+      <code>catalog.predict_visible()</code> takes the frame timestamp,
+      site lat/lon/elevation, and filters an 82-star list (bright stars,
+      Vmag ≤ 4.5, drawn from the Yale Bright Star Catalog in J2000 ICRS)
+      to those above the horizon at that moment. The transform is done
+      in one batched <code>astropy.coordinates.SkyCoord → AltAz</code>
+      call — per-star transforms are an order of magnitude slower.
+    </p>
+
+    <h3>3. WCS projection</h3>
+    <p>
+      <code>project_stars_to_pixels()</code> reconstructs an
+      <code>astropy.wcs.WCS</code> from the calibration header and runs
+      <code>world_to_pixel_values(ra, dec)</code> on each predicted
+      star. The recovered <code>(dx, dy)</code> drift is added back at
+      detection time, so the WCS itself is never modified per-frame.
+    </p>
+
+    <h3>4. Point-source SNR test</h3>
+    <p>
+      <code>detect_at_position(image, x, y)</code> reads a small window
+      around the expected pixel, takes the peak vs the local median, and
+      normalises by the median absolute deviation. Above
+      <code>snr_threshold</code> counts as a detection. The default
+      <code>window=9</code> is wide enough to absorb residual drift the
+      cross-correlation missed without picking up neighbouring sources.
+    </p>
+
+    <div class="callout">
+      <div class="callout-title">Why the local-median approach</div>
+      <p>
+        An earlier version ran <code>scipy.ndimage.median_filter</code>
+        on the whole frame to make a background image, then subtracted.
+        Profiling showed that one call accounted for <strong>4.5 of 5
+        seconds per frame</strong>. Since the per-window detector
+        already does its own local-median estimate, the global pass was
+        pure overhead. Removing it brought per-frame cost from ~5&nbsp;s
+        to <strong>~0.12&nbsp;s</strong>.
+      </p>
+    </div>
+
+    <h2>Tuned defaults — why they aren't the library defaults</h2>
+    <p>
+      The Axis-StarrCanyon1 cam points <em>roughly horizontally</em>.
+      Empirically, catalog stars in its field of view sit between
+      <strong>alt −19° and +18°</strong>. The library's natural defaults
+      (designed for an upward-looking all-sky camera) immediately wipe
+      out every catalog star and produce a constant
+      <code>cloud_score = 1.0</code>:
+    </p>
+
+    <table>
+      <thead>
+        <tr><th>Parameter</th><th>Library default</th><th>This cam</th><th>Why</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>--min-alt</code></td>       <td>10°</td><td><strong>0°</strong></td>   <td>Cam's max alt is +18° — anything above 10° leaves almost nothing.</td></tr>
+        <tr><td><code>--max-vmag</code></td>      <td>3.0</td><td><strong>4.0</strong></td>  <td>Cam is sensitive enough to catch Vmag 4 in clear skies; expands the prediction set ~3×.</td></tr>
+        <tr><td><code>--snr-threshold</code></td> <td>4.0</td><td><strong>3.0</strong></td>  <td>JPEG quantisation and a small detection window justify a less-strict cut.</td></tr>
+        <tr><td><code>window</code></td>          <td>7</td>  <td><strong>9</strong></td>    <td>Wider window absorbs residual sub-pixel drift the foreground cross-correlation can't recover.</td></tr>
+      </tbody>
+    </table>
+
+    <p>
+      If you point this analyzer at a different camera, expect to re-tune
+      these. The convenience wrapper <code>run.sh</code> bakes them in:
+      <code>--min-alt 0 --max-vmag 4.0 --snr-threshold 3.0</code>.
+    </p>
+
+    <h2>Score → hourly CSV</h2>
+    <p>
+      <code>FrameScore.cloud_score</code> is just <code>1 − detected/expected</code>.
+      <code>analyze.aggregate_hourly()</code> bins frames by local hour
+      (default UTC−7 PDT) and takes the per-hour mean of
+      <code>cloud_score</code> across all frames in that bin. The output
+      CSV has columns:
+    </p>
+    <pre><code>hour_local, frames, mean_cloud_score, mean_detection_ratio, mean_expected, mean_detected</code></pre>
+
+    <h2>How this calibrated the predictor</h2>
+    <p>
+      On 2026-05-14/15 the predictor (with ring-max only) reported
+      <span class="flag-bad">extinction</span> for every hour overnight at Coe. The Axis-StarrCanyon1
+      camera, at the same elevation, showed clear skies overhead with
+      Vmag-3 stars detected through the entire window. Diagnostic
+      <code>cloud_score</code> was around 0.2 from 22:00 to 05:00 PT — well
+      below the 0.5 you'd expect if the site were actually under the
+      deck.
+    </p>
+    <p>
+      That mismatch motivated the <code>marine layer below</code> flag.
+      The thresholds <code>UNDERCAST_CENTER_RH_MAX_PCT = 70</code> and
+      <code>UNDERCAST_CENTER_COVER_MAX_PCT = 30</code> sit at the upper
+      edge of the center-cell readings on that confirmed-clear night.
+      The fix preserves the conservative ring-max signal (still useful —
+      it correctly describes <em>cells below the site</em>) while adding
+      a positive signal for "you're above the undercast."
+    </p>
+
+    <h2>Running it</h2>
+    <pre><code># Idempotent full pipeline: setup → fetch → calibrate → analyze
+./webcam_analyzer/run.sh
+
+# Skip the network step and re-analyze cached frames
+./webcam_analyzer/run.sh --skip-fetch
+
+# Force re-plate-solving (e.g. after the cam was repositioned)
+./webcam_analyzer/run.sh --recalibrate
+
+# Use a specific reference frame
+./webcam_analyzer/run.sh --reference .frames-cache/Axis-StarrCanyon1/1min/1778830000.000000000.jpg</code></pre>
+
+    <p>
+      <code>run.sh</code> picks the median frame of the largest pool as
+      the calibration reference, which for a 12-hour overnight window is
+      roughly 2 AM local — darkest, most stars, lowest sky background.
+    </p>
+
+    <p style="margin-top: 3rem;">
+      <a href="index.html">← Back to overview</a>
+    </p>
+  </main>
+
+  <footer>
+    Repository: <code>github.com/lancepickens/Weather</code>
+  </footer>
+</body>
+</html>
