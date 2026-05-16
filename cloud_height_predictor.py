@@ -77,6 +77,25 @@ class CloudHeightForecast:
     center_cloud_cover_pct: float = 0.0
     center_cloud_cover_low_pct: float = 0.0
     center_cloud_base_height_agl_m: float = 0.0
+    # 10 m wind from the center cell. Ring-max isn't appropriate for wind:
+    # gradients across terrain are real physics, not grid-snap artifacts,
+    # so taking the max would systematically bias the site reading high.
+    wind_speed_ms: float = 0.0
+    wind_gust_ms: float = 0.0
+    wind_direction_deg: float = 0.0
+
+
+_COMPASS_16 = (
+    "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+    "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
+)
+
+
+def compass_direction(degrees: float) -> str:
+    """Convert a meteorological wind direction (0–360°, from) to a 16-point compass label."""
+    normalized = degrees % 360.0
+    idx = int((normalized / 22.5) + 0.5) % 16
+    return _COMPASS_16[idx]
 
 
 def lifted_condensation_level_m(temperature_c: float, dewpoint_c: float) -> float:
@@ -185,6 +204,10 @@ def _build_forecast(
     center_rh = hourly.get("center_relative_humidity_2m", hourly["relative_humidity_2m"])[index]
     center_cov = hourly.get("center_cloud_cover", hourly["cloud_cover"])[index]
     center_low = hourly.get("center_cloud_cover_low", hourly["cloud_cover_low"])[index]
+    # Wind is optional in fixtures predating the wind column.
+    wind_speed = hourly["wind_speed_10m"][index] if "wind_speed_10m" in hourly else 0.0
+    wind_gust = hourly["wind_gusts_10m"][index] if "wind_gusts_10m" in hourly else 0.0
+    wind_dir = hourly["wind_direction_10m"][index] if "wind_direction_10m" in hourly else 0.0
     return CloudHeightForecast(
         time=datetime.fromisoformat(hourly["time"][index]).replace(tzinfo=tz),
         temperature_c=temp,
@@ -200,6 +223,9 @@ def _build_forecast(
         center_cloud_cover_pct=center_cov,
         center_cloud_cover_low_pct=center_low,
         center_cloud_base_height_agl_m=lifted_condensation_level_m(temp, center_dew),
+        wind_speed_ms=wind_speed,
+        wind_gust_ms=wind_gust,
+        wind_direction_deg=wind_dir,
     )
 
 
@@ -229,6 +255,9 @@ _RING_MAX_KEYS = (
     "cloud_cover_high",
 )
 _CENTER_KEYS = ("time", "temperature_2m", "is_day")
+# Wind keys taken from the center cell only. Conditional in
+# _aggregate_cells so older fixtures (no wind data) still aggregate cleanly.
+_CENTER_WIND_KEYS = ("wind_speed_10m", "wind_gusts_10m", "wind_direction_10m")
 # Center-cell values we keep alongside the ring-max view, exposed to
 # callers under a ``center_`` prefix on the aggregated payload.
 _CENTER_DIAGNOSTIC_KEYS = (
@@ -253,6 +282,9 @@ def _aggregate_cells(cells: list[dict]) -> dict:
     """
     center = cells[0]
     hourly = {key: center["hourly"][key] for key in _CENTER_KEYS}
+    for key in _CENTER_WIND_KEYS:
+        if key in center["hourly"]:
+            hourly[key] = list(center["hourly"][key])
     for key in _RING_MAX_KEYS:
         series = [c["hourly"][key] for c in cells]
         hourly[key] = [max(values) for values in zip(*series)]
@@ -283,8 +315,12 @@ def _fetch_open_meteo(site: Site, forecast_days: int) -> dict:
                 "cloud_cover_mid",
                 "cloud_cover_high",
                 "is_day",
+                "wind_speed_10m",
+                "wind_gusts_10m",
+                "wind_direction_10m",
             ]
         ),
+        "wind_speed_unit": "ms",
         "past_days": 1,
         "forecast_days": forecast_days,
         "timezone": "auto",
@@ -367,7 +403,8 @@ def format_forecast(
         f"elev {site.elevation_m:.0f} m MSL{ridge_note})\n\n"
         f"{time_col:<{time_col_width}} {'T°C':>5} {'Td°C':>5} {'RH%':>5} "
         f"{'Cov%':>5} {'Low%':>5} {'Mid%':>5} {'High%':>6} "
-        f"{'Base m AGL':>11} {'Base m MSL':>11}  Note"
+        f"{'Base m AGL':>11} {'Base m MSL':>11} "
+        f"{'Wnd m/s':>7} {'Gst m/s':>7} {'Dir':>4}  Note"
     )
     rows = [header]
     for i, night in enumerate(nights):
@@ -391,7 +428,9 @@ def format_forecast(
                 f"{f.cloud_cover_pct:>5.0f} {f.cloud_cover_low_pct:>5.0f} "
                 f"{f.cloud_cover_mid_pct:>5.0f} {f.cloud_cover_high_pct:>6.0f} "
                 f"{f.cloud_base_height_agl_m:>11.0f} "
-                f"{cloud_base_height_msl_m(f, site):>11.0f}  {', '.join(notes)}"
+                f"{cloud_base_height_msl_m(f, site):>11.0f} "
+                f"{f.wind_speed_ms:>7.1f} {f.wind_gust_ms:>7.1f} "
+                f"{compass_direction(f.wind_direction_deg):>4}  {', '.join(notes)}"
             )
     return "\n".join(rows)
 

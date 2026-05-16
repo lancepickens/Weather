@@ -20,6 +20,7 @@ from cloud_height_predictor import (  # noqa: E402
     _neighbour_coords,
     _site_timezone,
     cloud_base_height_msl_m,
+    compass_direction,
     format_forecast,
     format_site_list,
     is_below_ridge,
@@ -566,6 +567,129 @@ def test_load_sites_missing_file():
         assert "not found" in str(exc)
     else:
         raise AssertionError("expected ValueError for missing file")
+
+
+def test_compass_direction_cardinals():
+    assert compass_direction(0) == "N"
+    assert compass_direction(90) == "E"
+    assert compass_direction(180) == "S"
+    assert compass_direction(270) == "W"
+    assert compass_direction(360) == "N"
+
+
+def test_compass_direction_intercardinals():
+    assert compass_direction(45) == "NE"
+    assert compass_direction(135) == "SE"
+    assert compass_direction(225) == "SW"
+    assert compass_direction(315) == "NW"
+    # 16-point resolution picks up the secondary intercardinals too.
+    assert compass_direction(337.5) == "NNW"
+    assert compass_direction(22.5) == "NNE"
+
+
+def test_compass_direction_normalizes_out_of_range():
+    assert compass_direction(-90) == "W"
+    assert compass_direction(720 + 45) == "NE"
+
+
+def test_build_forecast_populates_wind_fields():
+    hourly = {
+        "time": ["2026-05-15T22:00"],
+        "temperature_2m": [10.0],
+        "dew_point_2m": [0.0],
+        "relative_humidity_2m": [50.0],
+        "cloud_cover": [20],
+        "cloud_cover_low": [10],
+        "cloud_cover_mid": [5],
+        "cloud_cover_high": [5],
+        "wind_speed_10m": [12.5],
+        "wind_gusts_10m": [19.2],
+        "wind_direction_10m": [330.0],
+    }
+    f = _build_forecast(hourly, 0)
+    assert f.wind_speed_ms == 12.5
+    assert f.wind_gust_ms == 19.2
+    assert f.wind_direction_deg == 330.0
+
+
+def test_build_forecast_wind_defaults_when_payload_omits_wind():
+    hourly = {
+        "time": ["2026-05-15T22:00"],
+        "temperature_2m": [10.0],
+        "dew_point_2m": [0.0],
+        "relative_humidity_2m": [50.0],
+        "cloud_cover": [20],
+        "cloud_cover_low": [10],
+        "cloud_cover_mid": [5],
+        "cloud_cover_high": [5],
+    }
+    f = _build_forecast(hourly, 0)
+    assert f.wind_speed_ms == 0.0
+    assert f.wind_gust_ms == 0.0
+    assert f.wind_direction_deg == 0.0
+
+
+def test_aggregate_cells_takes_wind_from_center_not_ring_max():
+    center = {
+        "utc_offset_seconds": -25200, "timezone_abbreviation": "PDT",
+        "hourly": {
+            "time": ["2026-05-15T22:00"],
+            "temperature_2m": [10.0],
+            "is_day": [0],
+            "dew_point_2m": [0.0],
+            "relative_humidity_2m": [50],
+            "cloud_cover": [0], "cloud_cover_low": [0],
+            "cloud_cover_mid": [0], "cloud_cover_high": [0],
+            "wind_speed_10m": [4.0],
+            "wind_gusts_10m": [6.0],
+            "wind_direction_10m": [330.0],
+        },
+    }
+    windy_neighbour = {
+        "utc_offset_seconds": -25200, "timezone_abbreviation": "PDT",
+        "hourly": {
+            "time": ["2026-05-15T22:00"],
+            "temperature_2m": [10.0],
+            "is_day": [0],
+            "dew_point_2m": [0.0],
+            "relative_humidity_2m": [50],
+            "cloud_cover": [0], "cloud_cover_low": [0],
+            "cloud_cover_mid": [0], "cloud_cover_high": [0],
+            "wind_speed_10m": [25.0],
+            "wind_gusts_10m": [40.0],
+            "wind_direction_10m": [10.0],
+        },
+    }
+    out = _aggregate_cells([center, windy_neighbour])["hourly"]
+    # Center wins for wind — terrain gradient is real, not a grid artifact.
+    assert out["wind_speed_10m"] == [4.0]
+    assert out["wind_gusts_10m"] == [6.0]
+    assert out["wind_direction_10m"] == [330.0]
+
+
+def test_format_forecast_shows_wind_columns_and_values():
+    pdt = timezone(timedelta(hours=-7), "PDT")
+    f = CloudHeightForecast(
+        time=datetime(2026, 5, 15, 22, 0, tzinfo=pdt),
+        temperature_c=12.0,
+        dewpoint_c=4.0,
+        relative_humidity_pct=55.0,
+        cloud_cover_pct=10.0,
+        cloud_cover_low_pct=5.0,
+        cloud_cover_mid_pct=3.0,
+        cloud_cover_high_pct=2.0,
+        cloud_base_height_agl_m=lifted_condensation_level_m(12.0, 4.0),
+        wind_speed_ms=10.5,
+        wind_gust_ms=17.8,
+        wind_direction_deg=335.0,
+    )
+    out = format_forecast([[f]], HENRY_COE)
+    assert "Wnd m/s" in out
+    assert "Gst m/s" in out
+    assert "Dir" in out
+    assert "10.5" in out
+    assert "17.8" in out
+    assert "NNW" in out  # 335° → NNW
 
 
 def test_format_site_list_includes_ids_and_names():
