@@ -10,8 +10,9 @@ temperature and dewpoint from DWD's ICON model via Open-Meteo
 (`models=icon_seamless`) and Espy's equation (`H ≈ 125 × (T − Td)` meters). Output is restricted to
 astronomical night hours (sunset to sunrise at the site's local
 coordinates) and shown in the site's local timezone, grouped per night.
-Each hour includes 2 m relative humidity, cloud cover by layer, and base
-height in meters AGL and MSL. The Note column flags `extinction` when
+Each hour includes 2 m relative humidity, cloud cover by layer, base
+height in meters AGL and MSL, and 10 m wind speed / gust / direction
+(m/s, 16-point compass). The Note column flags `extinction` when
 the modeled cloud base sits at or below the site (observer in cloud),
 `below ridge` when the deck is below the site's local ridge (if
 configured), `marine-layer risk` when surface RH exceeds 90 %, and
@@ -50,6 +51,11 @@ guarantee distinct ICON cells in every direction) and aggregates them:
 
 - `temperature_2m`, `time`, `is_day` — taken from the center cell so
   the site's point forecast remains the reference.
+- `wind_speed_10m`, `wind_gusts_10m`, `wind_direction_10m` — taken from
+  the center cell too. Wind gradients across terrain are real physics
+  rather than the grid-snap artifact that motivates ring-max for
+  moisture/cloud, so taking the max across neighbours would
+  systematically bias the site reading high.
 - `dew_point_2m`, `relative_humidity_2m`, `cloud_cover` (and the low /
   mid / high splits) — element-wise **max** across the ring,
   computed independently per variable. The reported LCL is therefore

@@ -66,11 +66,34 @@ while every neighbour within a few km is inside the marine layer.
 `cloud_height_predictor.py` mitigates this by fetching a 3×3 neighbour ring
 (`NEIGHBOUR_OFFSET_DEG = 0.15`, ≈17 km — large enough to guarantee distinct
 ICON cells in every direction) and taking the **element-wise max** of RH,
-dewpoint, cloud cover, and the layer splits. Temperature and `is_day` come
-from the *center* cell. Because each variable's max can come from a different
-cell, the displayed `Td°C` may exceed the center `T°C` — that's intentional;
-the row represents three separate worst-case readings rather than one
-self-consistent point forecast.
+dewpoint, cloud cover, and the layer splits. Temperature, `is_day`, and the
+10 m wind triple (`wind_speed_10m`, `wind_gusts_10m`, `wind_direction_10m`)
+come from the *center* cell. Wind specifically is **not** ring-maxed: gradients
+across terrain are real physics rather than the grid-snap artifact ring-max
+exists to defeat, so taking the max across neighbours would systematically
+bias the site reading high. Because each ring-max variable's max can come
+from a different cell, the displayed `Td°C` may exceed the center `T°C` —
+that's intentional; the row represents three separate worst-case readings
+rather than one self-consistent point forecast.
+
+### Cloud height predictor: column layout
+
+The output table emits, per hour: `T°C`, `Td°C`, `RH%`, `Cov%`, `Low%`,
+`Mid%`, `High%`, `Base m AGL`, `Base m MSL`, `Wnd m/s`, `Gst m/s`, `Dir`
+(16-point compass), and the Note column. Wind columns were added on top
+of the existing layout; existing tests assert via substring matches so
+adding more columns is non-breaking, but renaming an existing column
+header would break the `assert "RH%" in out` style tests.
+
+### Cloud height predictor: timezone resolution
+
+`_site_timezone` prefers `zoneinfo.ZoneInfo(payload["timezone"])` (e.g.
+`America/Los_Angeles`) over the offset-based fallback, because Open-Meteo's
+`timezone_abbreviation` field today returns `GMT-7` rather than `PDT`. The
+ZoneInfo path is DST-aware, so a multi-night forecast crossing a DST
+boundary will label hours correctly. The fixed-offset fallback (using
+`utc_offset_seconds`) is kept for payloads that omit the IANA name or
+when `tzdata` doesn't recognize it.
 
 ### The four flag predicates and how they interact
 

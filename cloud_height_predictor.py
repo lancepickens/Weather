@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Iterable
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "sites.json"
@@ -333,8 +334,23 @@ def _fetch_open_meteo(site: Site, forecast_days: int) -> dict:
 
 
 def _site_timezone(payload: dict) -> tzinfo:
+    """Resolve an IANA timezone for the site.
+
+    Prefers ``zoneinfo`` lookup on the IANA name (``America/Los_Angeles``)
+    so the displayed abbreviation tracks DST correctly — Open-Meteo's
+    ``timezone_abbreviation`` field today returns offset-style labels like
+    ``GMT-7`` rather than ``PDT``. Falls back to a fixed-offset timezone
+    built from ``utc_offset_seconds`` when the IANA name is missing or
+    unknown to the local tzdata.
+    """
+    iana_name = payload.get("timezone")
+    if iana_name:
+        try:
+            return ZoneInfo(iana_name)
+        except ZoneInfoNotFoundError:
+            pass
     offset = timedelta(seconds=int(payload.get("utc_offset_seconds", 0)))
-    name = payload.get("timezone_abbreviation") or payload.get("timezone") or "UTC"
+    name = payload.get("timezone_abbreviation") or iana_name or "UTC"
     return timezone(offset, name)
 
 

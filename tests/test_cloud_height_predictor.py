@@ -276,16 +276,28 @@ def test_build_forecast_honors_local_timezone():
     assert f.time.tzname() == "PDT"
 
 
-def test_site_timezone_parses_open_meteo_payload():
+def test_site_timezone_resolves_iana_zone_with_dst_aware_label():
+    # Open-Meteo today returns "GMT-7" as the abbreviation; we want the
+    # IANA-resolved "PDT"/"PST" based on the actual datetime instead.
     tz = _site_timezone(
         {
             "utc_offset_seconds": -25200,
             "timezone": "America/Los_Angeles",
-            "timezone_abbreviation": "PDT",
+            "timezone_abbreviation": "GMT-7",
         }
     )
-    assert tz.utcoffset(None) == timedelta(hours=-7)
-    assert tz.tzname(None) == "PDT"
+    summer = datetime(2026, 5, 15, 12, 0, tzinfo=tz)
+    assert summer.utcoffset() == timedelta(hours=-7)
+    assert summer.tzname() == "PDT"
+    winter = datetime(2026, 1, 15, 12, 0, tzinfo=tz)
+    assert winter.utcoffset() == timedelta(hours=-8)
+    assert winter.tzname() == "PST"
+
+
+def test_site_timezone_falls_back_to_fixed_offset_when_iana_missing():
+    tz = _site_timezone({"utc_offset_seconds": -28800, "timezone_abbreviation": "PST"})
+    assert tz.utcoffset(None) == timedelta(hours=-8)
+    assert tz.tzname(None) == "PST"
 
 
 def test_site_timezone_defaults_to_utc_when_missing():
