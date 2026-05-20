@@ -22,14 +22,40 @@ elevation of the default predictor site `henry-coe` in `sites.json`. The
 webcam stream is intended as ground truth to calibrate and validate the
 forecast.
 
+A third, much smaller tool lives in `scripts/`:
+
+3. **`scripts/coe_cloud.py`** — a self-contained terminal renderer that
+   shows the upcoming ~16 nights as colored sunset→sunrise cloud-cover bars
+   and ranks the five best upcoming nights. Hardcoded to the Coe
+   coordinate; uses only `hourly.cloud_cover` (no LCL, no ring sampling,
+   no flags). Complements the per-hour predictor with an at-a-glance
+   multi-night view.
+
+## Directory layout
+
+```
+.
+├── cloud_height_predictor.py    # main forecaster
+├── sites.json                   # site config for ↑
+├── tests/                       # tests for ↑ (standalone runner)
+├── scripts/
+│   ├── hc_cloud_forecast.sh     # Henry Coe wrapper around the predictor
+│   └── coe_cloud.py             # multi-night terminal cloud-bar view
+├── docs/                        # HTML architecture docs (gh-pages style)
+└── webcam_analyzer/             # pip-installable subproject (own .venv, tests)
+```
+
 ## Common commands
 
 ```sh
 # Forecast (writes to stdout)
-./hc_cloud_forecast.sh                                  # Henry Coe convenience wrapper
+./scripts/hc_cloud_forecast.sh                          # Henry Coe convenience wrapper
 python3 cloud_height_predictor.py --site henry-coe      # any site in sites.json
 python3 cloud_height_predictor.py --list-sites
 python3 cloud_height_predictor.py --site henry-coe --nights 3
+
+# Multi-night at-a-glance terminal view (Coe-only, cloud_cover only)
+python3 scripts/coe_cloud.py
 
 # Forecast tests (standalone runner — no pytest needed)
 python3 tests/test_cloud_height_predictor.py

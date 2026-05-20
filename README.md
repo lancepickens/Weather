@@ -75,6 +75,10 @@ python3 cloud_height_predictor.py --list-sites
 python3 cloud_height_predictor.py --site henry-coe
 python3 cloud_height_predictor.py --site henry-coe --nights 3
 python3 cloud_height_predictor.py --help
+
+# Convenience wrapper for the default site
+./scripts/hc_cloud_forecast.sh
+./scripts/hc_cloud_forecast.sh --nights 3
 ```
 
 ### `sites.json` schema
@@ -100,4 +104,18 @@ local ridge.
 
 ```sh
 python3 tests/test_cloud_height_predictor.py
+```
+
+## Multi-night terminal view (`scripts/coe_cloud.py`)
+
+A lighter, color-only terminal tool that shows the upcoming ~16 nights as
+sunset→sunrise cloud-cover bars and ranks the five best upcoming nights by
+average cover. It is hardcoded to the Coe coordinate and only uses
+`hourly.cloud_cover` from Open-Meteo — no LCL math, no ring sampling, no
+flags. Use it for an at-a-glance "when should I go?" decision; use
+`cloud_height_predictor.py` for the detailed per-hour forecast for any
+night.
+
+```sh
+python3 scripts/coe_cloud.py
 ```

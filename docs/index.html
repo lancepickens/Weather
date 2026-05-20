@@ -19,9 +19,10 @@
   <main>
     <h2>What this project is</h2>
     <p>
-      Two coupled command-line tools that together produce — and validate —
-      a per-hour cloud forecast for an amateur-astronomy observing site.
-      The default site is Henry W. Coe State Park (793&nbsp;m, on the Bay Area
+      Two coupled command-line tools — plus a lightweight terminal viewer —
+      that together produce, validate, and quickly summarize a per-hour
+      cloud forecast for an amateur-astronomy observing site. The default
+      site is Henry W. Coe State Park (793&nbsp;m, on the Bay Area
       marine-layer ceiling), but anything in <code>sites.json</code> works.
     </p>
 
@@ -44,6 +45,15 @@
               each frame, and reports an hourly cloud score. Used as
               <em>ground truth</em> to calibrate the predictor.</td>
           <td><code>webcam_analyzer/</code></td>
+        </tr>
+        <tr>
+          <td><code>coe_cloud.py</code></td>
+          <td>At-a-glance terminal view of the next ~16 nights as
+              colored sunset→sunrise cloud-cover bars, plus a top-5
+              ranking by average cover. Hardcoded to Coe; uses only
+              <code>hourly.cloud_cover</code> (no LCL, no ring, no
+              flags) — a complement to the detailed predictor.</td>
+          <td><code>scripts/</code></td>
         </tr>
       </tbody>
     </table>
@@ -223,9 +233,12 @@
        <a href="webcam_analyzer.html">→ Webcam Analyzer architecture</a>.</p>
 
     <h2>Running it</h2>
-    <pre><code># Forecast
-./hc_cloud_forecast.sh                          # Henry Coe wrapper
+    <pre><code># Forecast (detailed per-hour, any site in sites.json)
+./scripts/hc_cloud_forecast.sh                  # Henry Coe wrapper
 python3 cloud_height_predictor.py --site henry-coe --nights 3
+
+# At-a-glance multi-night terminal view (Coe-only)
+python3 scripts/coe_cloud.py
 
 # Webcam ground truth — fetch + calibrate + analyze
 ./webcam_analyzer/run.sh                        # one-shot
