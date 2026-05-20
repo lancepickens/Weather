@@ -7,11 +7,14 @@ renders the upcoming ~16 nights as colored sunset→sunrise bars at a
 glance, plus a top-5 "best upcoming" ranking by average cloud cover.
 
 Hardcoded to the Coe coordinate. Cloud cover comes from Open-Meteo
-(``ncep_aigfs025``); lunar altitude & illumination are computed
-inline with low-precision Meeus formulae (Open-Meteo provides no
-lunar fields). No LCL math, no neighbour-ring sampling, no moisture
-/ wind / flag logic. Use it to pick *which* night, then run the
-predictor for the chosen night's hour-by-hour detail.
+(``gfs_seamless`` — HRRR's ~3 km grid for the first 48 h then GFS
+Global out to 16 days; this combination gives the closest grid cell
+to Coe at ~1 km while preserving the full 16-day horizon). Lunar
+altitude & illumination are computed inline with low-precision
+Meeus formulae (Open-Meteo provides no lunar fields). No LCL math,
+no neighbour-ring sampling, no moisture / wind / flag logic. Use it
+to pick *which* night, then run the predictor for the chosen
+night's hour-by-hour detail.
 """
 import json
 import math
@@ -38,7 +41,7 @@ URL = (
     f"&hourly=cloud_cover"
     f"&timezone=America%2FLos_Angeles"
     f"&past_days=3&forecast_days=16"
-    f"&models=ncep_aigfs025"
+    f"&models=gfs_seamless"
 )
 
 RESET   = "\033[0m"

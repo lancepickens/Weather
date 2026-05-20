@@ -49,10 +49,15 @@
         <tr>
           <td><code>coe_cloud.py</code></td>
           <td>At-a-glance terminal view of the next ~16 nights as
-              colored sunset→sunrise cloud-cover bars, plus a top-5
-              ranking by average cover. Hardcoded to Coe; uses only
-              <code>hourly.cloud_cover</code> (no LCL, no ring, no
-              flags) — a complement to the detailed predictor.</td>
+              colored sunset→sunrise cloud-cover bars next to a
+              per-hour lunar-illumination bar, plus a top-5 ranking
+              by average cover. Hardcoded to Coe (loaded from
+              <code>sites.json</code>); cloud cover from
+              <code>gfs_seamless</code> (HRRR for the first 48 h,
+              GFS Global to 16 days — closest grid cell of any
+              16-day model at ~1 km from Coe). Moon altitude and
+              phase computed inline. No LCL, no ring, no flags —
+              a complement to the detailed predictor.</td>
           <td><code>scripts/</code></td>
         </tr>
       </tbody>

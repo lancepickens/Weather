@@ -109,13 +109,19 @@ python3 tests/test_cloud_height_predictor.py
 ## Multi-night terminal view (`scripts/coe_cloud.py`)
 
 A lighter, color-only terminal tool that shows the upcoming ~16 nights as
-sunset→sunrise cloud-cover bars and ranks the five best upcoming nights by
-average cover. It is hardcoded to the Coe coordinate and only uses
-`hourly.cloud_cover` from Open-Meteo — no LCL math, no ring sampling, no
-flags. Use it for an at-a-glance "when should I go?" decision; use
-`cloud_height_predictor.py` for the detailed per-hour forecast for any
-night.
+sunset→sunrise cloud-cover bars next to a per-hour lunar-illumination bar
+(grayed `·` below horizon, otherwise illumination % colored on the same
+red→indigo scale as cloud cover, since bright moon is also bad for
+observing). It ranks the five best upcoming nights by average cloud cover.
+The script loads Coe's coordinate from `sites.json`, fetches Open-Meteo's
+`gfs_seamless` model (HRRR's ~3 km grid for the first 48 h, then GFS
+Global out to 16 days — the closest grid cell to Coe of any 16-day
+model), and computes the moon altitude/phase inline. No LCL math, no
+ring sampling, no flags. Use it for an at-a-glance "when should I go?"
+decision; use `cloud_height_predictor.py` for the detailed per-hour
+forecast for any night.
 
 ```sh
 python3 scripts/coe_cloud.py
+python3 tests/test_coe_cloud.py   # moon math + cloud_bar ANSI invariant
 ```

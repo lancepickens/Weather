@@ -27,9 +27,10 @@ A third, much smaller tool lives in `scripts/`:
 3. **`scripts/coe_cloud.py`** — a self-contained terminal renderer that
    shows the upcoming ~16 nights as colored sunset→sunrise cloud-cover bars
    and ranks the five best upcoming nights. Hardcoded to the Coe
-   coordinate; uses only `hourly.cloud_cover` (no LCL, no ring sampling,
-   no flags). Complements the per-hour predictor with an at-a-glance
-   multi-night view.
+   coordinate (loaded from `sites.json`); uses `hourly.cloud_cover` from
+   Open-Meteo (`gfs_seamless`) plus an inline-computed lunar-illumination
+   column. No LCL, no ring sampling, no flags. Complements the per-hour
+   predictor with an at-a-glance multi-night view.
 
 ## Directory layout
 
@@ -54,8 +55,11 @@ python3 cloud_height_predictor.py --site henry-coe      # any site in sites.json
 python3 cloud_height_predictor.py --list-sites
 python3 cloud_height_predictor.py --site henry-coe --nights 3
 
-# Multi-night at-a-glance terminal view (Coe-only, cloud_cover only)
+# Multi-night at-a-glance terminal view (Coe-only, cloud cover + moon)
 python3 scripts/coe_cloud.py
+
+# coe_cloud.py tests (moon math + cloud_bar ANSI invariant)
+python3 tests/test_coe_cloud.py
 
 # Forecast tests (standalone runner — no pytest needed)
 python3 tests/test_cloud_height_predictor.py
@@ -137,6 +141,59 @@ generate this signal; without it, ring-max aggregation produces a false
 overcast at sites perched on the marine-layer ceiling (Henry Coe sits at
 793 m, right at the typical Bay Area inversion top). The thresholds were
 calibrated against the 2026-05-14/15 webcam ground truth at the Coe site.
+
+### `coe_cloud.py`: model choice (`gfs_seamless`)
+
+Open-Meteo offers ~20 global / regional models that cover California. For
+Coe's coordinate (37.1858, -121.5483) the grid-cell snap distances and
+forecast horizons measured 2026-05-20 were:
+
+| Model | Snap distance | Horizon |
+|---|---|---|
+| `gfs_seamless` | **1.06 km** | **16 days** |
+| `gem_seamless` | 0.78 km | 10 days |
+| `gfs_global` | 2.42 km | 16 days |
+| `ukmo_global_deterministic_10km` | 5.63 km | 7 days |
+| `ncep_aigfs025` | 8.32 km | 16 days |
+| `ecmwf_aifs025_single` | 8.32 km | 15 days |
+| `ecmwf_ifs025` | 8.32 km | 14.5 days |
+| `icon_seamless` (predictor's model) | 8.32 km | 7.5 days |
+
+`gfs_seamless` wins on the "closest grid cell × longest horizon" product:
+it uses HRRR's ~3 km CONUS grid for the first 48 h (the source of the
+1 km snap to Coe) then transitions to GFS Global out to 16 days. The
+HRRR portion catches Bay Area marine-layer dynamics that 0.25° global
+models smear over, while the GFS Global tail preserves the full 16-day
+ranking horizon that AIGFS gave. Earlier model choices:
+`ncep_aigfs025` was used briefly after `gfs_graphcast025` was
+effectively retired (NOAA replaced operational GraphCastGFS with AIGFS
+on 2025-12-17, and `gfs_graphcast025` on Open-Meteo dropped to ~3 days
+of experimental data); the switch to `gfs_seamless` keeps the same
+16-day horizon while moving the grid cell from a 0.25° snap (8.32 km)
+to the 3-km HRRR snap (1.06 km).
+
+`cloud_height_predictor.py` still uses `icon_seamless` and is unaffected
+— its ring-max aggregation is designed for ICON's grid, and the
+per-hour detail it produces over 1-3 nights doesn't need the 16-day
+horizon. The two scripts serve different purposes and can use
+different models.
+
+### `coe_cloud.py`: inline lunar math
+
+Open-Meteo exposes no moon fields (no `moonrise`, `moon_phase`,
+`moon_illumination`, etc.). To preserve the script's zero-dependency
+nature, lunar altitude and illuminated fraction are computed inline in
+`_moon_geometry` using low-precision Meeus formulae (chapters 47 and
+48), accurate to ~0.1° on altitude and ~1 % on illumination — plenty
+for "is the moon up, how bright". The lunar bar mirrors the cloud
+bar's per-hour blocks; below-horizon hours show a gray `·`. The bar
+shares `cloud_color` so that high illumination (bad for observing)
+shows red just like high cloud cover does.
+
+`cloud_bar` and `moon_for_night` both rely on a single end-of-bar
+ANSI `RESET` — emitting `RESET` on color transitions would kill the
+outer `DIM` wrapping used for past-night dimming. There's a regression
+test for this invariant in `tests/test_coe_cloud.py`.
 
 ### Webcam analyzer: why three stages exist separately
 
