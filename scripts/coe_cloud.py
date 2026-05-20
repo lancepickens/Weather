@@ -18,22 +18,27 @@ import math
 import sys
 import urllib.request
 from datetime import datetime, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
-# Observer coordinates — used for moon altitude. Keep these as the
-# precise site coords, not the grid-snapped lat/lon AIGFS returns.
-LAT = 37.183
-LON = -121.55093
+LOCAL_TZ = ZoneInfo("America/Los_Angeles")
+
+# Single source of truth for the observer coordinate: load from sites.json
+# so this stays in sync with cloud_height_predictor.py. LAT/LON feed both
+# the API request and the moon-altitude math.
+_SITES_PATH = Path(__file__).resolve().parent.parent / "sites.json"
+_SITE = json.loads(_SITES_PATH.read_text())["sites"]["henry-coe"]
+LAT = float(_SITE["latitude"])
+LON = float(_SITE["longitude"])
 
 URL = (
-    "https://api.open-meteo.com/v1/forecast"
-    "?latitude=37.183&longitude=-121.55093"
-    "&daily=temperature_2m_max,sunrise,sunset"
-    "&hourly=cloud_cover,visibility,dew_point_2m"
-    "&current=cloud_cover"
-    "&timezone=America%2FLos_Angeles"
-    "&past_days=3&forecast_days=16"
-    "&temperature_unit=fahrenheit"
-    "&models=ncep_aigfs025"
+    f"https://api.open-meteo.com/v1/forecast"
+    f"?latitude={LAT}&longitude={LON}"
+    f"&daily=sunrise,sunset"
+    f"&hourly=cloud_cover"
+    f"&timezone=America%2FLos_Angeles"
+    f"&past_days=3&forecast_days=16"
+    f"&models=ncep_aigfs025"
 )
 
 RESET   = "\033[0m"
@@ -50,6 +55,8 @@ MAGENTA = "\033[38;5;213m"
 PURPLE  = "\033[38;5;183m"
 GRAY    = "\033[38;5;238m"
 
+BLOCKS = ("▁", "▂", "▃", "▄", "▅", "▆", "▇", "█")
+
 
 def cloud_color(pct):
     if pct >= 90: return RED
@@ -61,18 +68,18 @@ def cloud_color(pct):
 
 
 def cloud_bar(hourly_pcts):
-    blocks = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
+    """Per-hour cloud-cover blocks. Inner state machine never emits RESET on
+    color transitions (only at end) so outer DIM wrapping for past nights
+    composes correctly."""
     parts = []
     last_color = None
     for pct in hourly_pcts:
         level = min(7, int(pct / 100 * 8))
         color = cloud_color(pct)
         if color != last_color:
-            if last_color is not None:
-                parts.append(RESET)
             parts.append(color)
             last_color = color
-        parts.append(blocks[level])
+        parts.append(BLOCKS[level])
     if last_color is not None:
         parts.append(RESET)
     return "".join(parts)
@@ -169,7 +176,6 @@ def moon_for_night(hours_local, utc_offset_sec):
     color = cloud_color (high illum = bad for observing); below-horizon hours show
     a gray '·'. Inner state machine never emits RESET, so outer DIM wrapping for
     past nights composes correctly."""
-    blocks = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
     parts = []
     last_color = None
     contribs = []
@@ -182,7 +188,7 @@ def moon_for_night(hours_local, utc_offset_sec):
             pct = illum * 100
             contribs.append(pct)
             color = cloud_color(pct)
-            ch = blocks[min(7, int(pct / 100 * 8))]
+            ch = BLOCKS[min(7, int(pct / 100 * 8))]
         if color != last_color:
             parts.append(color)
             last_color = color
@@ -201,7 +207,10 @@ def main():
         print(f"Failed to fetch weather: {e}", file=sys.stderr)
         sys.exit(1)
 
-    tz = data.get("timezone_abbreviation") or data.get("timezone", "")
+    # DST-aware abbreviation from zoneinfo. Open-Meteo's
+    # timezone_abbreviation today returns offset-style "GMT-7" rather than
+    # "PDT", so we derive the label locally.
+    tz = datetime.now(LOCAL_TZ).tzname()
     lat = data.get("latitude", "")
     lon = data.get("longitude", "")
     # Constant per response — fine for the 16-day window; would need per-hour
@@ -238,7 +247,7 @@ def main():
             "moon_bar": moon_bar_s,
         })
 
-    today = datetime.now().date()
+    today = datetime.now(LOCAL_TZ).date()
     tomorrow = today + timedelta(days=1)
 
     title = f"{BOLD}Coe Cloud Cover Predictor{RESET}"
