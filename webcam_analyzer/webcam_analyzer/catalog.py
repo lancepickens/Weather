@@ -1,8 +1,10 @@
 """Bright-star catalog and alt/az projection.
 
-We vendor ~80 of the brightest stars (Vmag ≤ 3.0) in J2000 ICRS coordinates.
-That's about all a 1/30-s security PTZ can plausibly see through Bay Area
-light pollution; loading the full Yale BSC would be overkill.
+We vendor 83 of the brightest stars (Vmag ≲ 3.3, mostly ≤ 3.0) in J2000
+ICRS coordinates, sourced from Hipparcos / SIMBAD. That's about all a
+1/30-s security PTZ can plausibly see through Bay Area light pollution;
+loading the full Yale BSC would be overkill. Callers filter by Vmag at
+call time via ``predict_visible(..., max_vmag=...)``.
 
 For predicting which stars are above the horizon at a given observation
 time, we lean on astropy's AltAz transformation (handles precession,

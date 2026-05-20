@@ -40,10 +40,13 @@ Deps: `astropy`, `photutils`, `numpy`, `scipy`, `Pillow`.
 # 1. Pull the 12-hour manifest + frames.
 .venv/bin/webcam-fetch --camera Axis-StarrCanyon1 --window 12-hour
 
-# 2a. Calibrate with a local astrometry.net install.
+# 2a. Calibrate with a local astrometry.net install. The default
+#     --solve-crop (a 200×200 center patch) and --scale-low/--scale-high
+#     (5°–8°) are tuned so the index-4115 series that ships with most
+#     home astrometry installs can solve a wide-FOV cam like this one.
 .venv/bin/webcam-calibrate \
   .frames-cache/Axis-StarrCanyon1/1min/<daylight-frame>.jpg \
-  --solve --scale-low 50 --scale-high 80
+  --solve
 
 # 2b. OR: upload the frame to nova.astrometry.net, download wcs.fits,
 #     and point the calibrator at it.
@@ -82,11 +85,16 @@ Polaris at lat 37.18° at the expected altitude (~37°).
 
 ## Troubleshooting
 
-* **`solve-field` fails with "no index files"** — install the index
-  series matching the cam's FOV. For Axis-StarrCanyon1 (FOV ≈ 65°), use
-  series 4117–4119. Or skip the local solve and use
-  nova.astrometry.net's free web solver, then pass the resulting
-  `wcs.fits` via `--wcs-file`.
+* **`solve-field` fails with "no index files"** — the default
+  `--solve-crop` solves a 200×200 sky patch at 5–8°, which the
+  `index-4115` series shipped with most local astrometry installs
+  already covers, so this is usually a path/install issue rather than a
+  missing index series. If you want to solve the *full frame* of a
+  wide-FOV cam like Axis-StarrCanyon1 (~65°), pass
+  `--solve-crop none --scale-low 50 --scale-high 80` and install the
+  4117–4119 series. The simplest escape hatch is to skip local solving
+  entirely and use nova.astrometry.net's free web solver, then pass the
+  resulting `wcs.fits` via `--wcs-file`.
 * **Horizon detection looks noisy** — make sure the calibration frame is
   a *daylight* frame; night frames have weaker sky/ridge contrast. The
   algorithm constrains the search to rows 20–85 % of frame height, so

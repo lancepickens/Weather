@@ -213,10 +213,10 @@
     <h3>2. Catalog prediction</h3>
     <p>
       <code>catalog.predict_visible()</code> takes the frame timestamp,
-      site lat/lon/elevation, and filters an 82-star list (bright stars,
-      Vmag ≤ 4.5, drawn from the Yale Bright Star Catalog in J2000 ICRS)
-      to those above the horizon at that moment. The transform is done
-      in one batched <code>astropy.coordinates.SkyCoord → AltAz</code>
+      site lat/lon/elevation, and filters an 83-star list (bright stars
+      with Vmag ≲ 3.3 in J2000 ICRS, sourced from Hipparcos/SIMBAD) to
+      those above the horizon at that moment. The transform is done in
+      one batched <code>astropy.coordinates.SkyCoord → AltAz</code>
       call — per-star transforms are an order of magnitude slower.
     </p>
 
@@ -268,9 +268,8 @@
       </thead>
       <tbody>
         <tr><td><code>--min-alt</code></td>       <td>10°</td><td><strong>0°</strong></td>   <td>Cam's max alt is +18° — anything above 10° leaves almost nothing.</td></tr>
-        <tr><td><code>--max-vmag</code></td>      <td>3.0</td><td><strong>4.0</strong></td>  <td>Cam is sensitive enough to catch Vmag 4 in clear skies; expands the prediction set ~3×.</td></tr>
+        <tr><td><code>--max-vmag</code></td>      <td>3.0</td><td><strong>4.0</strong></td>  <td>Cam is sensitive enough to catch Vmag 4 in clear skies. The bundled catalog tops out at ~3.3 (80 of 83 entries are ≤ 3.0), so passing 4.0 effectively means "use every catalog entry" — adds ~3 prediction targets above the 3.0 cap.</td></tr>
         <tr><td><code>--snr-threshold</code></td> <td>4.0</td><td><strong>3.0</strong></td>  <td>JPEG quantisation and a small detection window justify a less-strict cut.</td></tr>
-        <tr><td><code>window</code></td>          <td>7</td>  <td><strong>9</strong></td>    <td>Wider window absorbs residual sub-pixel drift the foreground cross-correlation can't recover.</td></tr>
       </tbody>
     </table>
 
@@ -284,11 +283,21 @@
     <p>
       <code>FrameScore.cloud_score</code> is just <code>1 − detected/expected</code>.
       <code>analyze.aggregate_hourly()</code> bins frames by local hour
-      (default UTC−7 PDT) and takes the per-hour mean of
-      <code>cloud_score</code> across all frames in that bin. The output
-      CSV has columns:
+      (default UTC−7 PDT) and takes the per-hour <em>median</em> of
+      <code>cloud_score</code> across all frames in that bin — plus a
+      90th-percentile column so brief cloud bursts in an otherwise-clear
+      hour aren't averaged away. The output CSV columns:
     </p>
-    <pre><code>hour_local, frames, mean_cloud_score, mean_detection_ratio, mean_expected, mean_detected</code></pre>
+    <pre><code>hour_local, n_frames, median_cloud_score, p90_cloud_score,
+median_expected, median_detected,
+median_sky_mean, median_sky_stddev</code></pre>
+    <p>
+      <code>median_sky_mean</code> and <code>median_sky_stddev</code>
+      are above-horizon-pixel brightness statistics: featureless cloud
+      reads as low stddev with high mean (a glowing overcast), while a
+      clear starry sky reads as higher stddev (point sources) and a
+      lower mean.
+    </p>
 
     <h2>How this calibrated the predictor</h2>
     <p>

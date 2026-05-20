@@ -65,8 +65,9 @@ def segment_horizon(image_path: Path, smoothing_sigma: float = 3.0) -> np.ndarra
     # Vertical Sobel highlights horizontal boundaries.
     grad = np.abs(sobel(smoothed, axis=0))
 
-    # Constrain the search band: horizons live in the middle 2/3 of the
-    # frame for a near-level cam. This rejects rooftop / sun lens flare.
+    # Constrain the search band: for a near-level cam, the horizon sits
+    # somewhere in rows 20–85 % of the frame. This rejects rooftop / sun
+    # lens flare above and dashboard / lower-bezel artifacts below.
     band_top = int(h * 0.20)
     band_bot = int(h * 0.85)
     grad[:band_top, :] = 0

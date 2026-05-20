@@ -1,4 +1,16 @@
 #!/usr/bin/env python3
+"""Multi-night terminal cloud-cover view for Henry W. Coe State Park.
+
+Standalone companion to ``cloud_height_predictor.py``: the predictor
+emits a detailed per-hour table for one or a few nights; this script
+renders the upcoming ~16 nights as colored sunset→sunrise bars at a
+glance, plus a top-5 "best upcoming" ranking by average cloud cover.
+
+Hardcoded to the Coe coordinate and uses only ``hourly.cloud_cover``
+from Open-Meteo — no LCL math, no neighbour-ring sampling, no
+moisture / wind / flag logic. Use it to pick *which* night, then run
+the predictor for the chosen night's hour-by-hour detail.
+"""
 import json
 import sys
 import urllib.request
