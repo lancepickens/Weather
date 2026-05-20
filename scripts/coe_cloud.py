@@ -25,6 +25,7 @@ URL = (
     "&timezone=America%2FLos_Angeles"
     "&past_days=3&forecast_days=16"
     "&temperature_unit=fahrenheit"
+    "&models=ncep_aigfs025"
 )
 
 RESET   = "\033[0m"
