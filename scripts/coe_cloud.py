@@ -6,15 +6,23 @@ emits a detailed per-hour table for one or a few nights; this script
 renders the upcoming ~16 nights as colored sunset→sunrise bars at a
 glance, plus a top-5 "best upcoming" ranking by average cloud cover.
 
-Hardcoded to the Coe coordinate and uses only ``hourly.cloud_cover``
-from Open-Meteo — no LCL math, no neighbour-ring sampling, no
-moisture / wind / flag logic. Use it to pick *which* night, then run
-the predictor for the chosen night's hour-by-hour detail.
+Hardcoded to the Coe coordinate. Cloud cover comes from Open-Meteo
+(``ncep_aigfs025``); lunar altitude & illumination are computed
+inline with low-precision Meeus formulae (Open-Meteo provides no
+lunar fields). No LCL math, no neighbour-ring sampling, no moisture
+/ wind / flag logic. Use it to pick *which* night, then run the
+predictor for the chosen night's hour-by-hour detail.
 """
 import json
+import math
 import sys
 import urllib.request
 from datetime import datetime, timedelta
+
+# Observer coordinates — used for moon altitude. Keep these as the
+# precise site coords, not the grid-snapped lat/lon AIGFS returns.
+LAT = 37.183
+LON = -121.55093
 
 URL = (
     "https://api.open-meteo.com/v1/forecast"
@@ -40,6 +48,7 @@ BLUE    = "\033[38;5;75m"
 INDIGO  = "\033[38;5;105m"
 MAGENTA = "\033[38;5;213m"
 PURPLE  = "\033[38;5;183m"
+GRAY    = "\033[38;5;238m"
 
 
 def cloud_color(pct):
@@ -75,15 +84,113 @@ def collect_night(sunset, sunrise, cc_by_hour):
         start += timedelta(hours=1)
     end = sunrise.replace(minute=0, second=0, microsecond=0)
 
-    pcts = []
+    hours, pcts = [], []
     cursor = start
     while cursor <= end:
         key = cursor.strftime("%Y-%m-%dT%H:%M")
         pct = cc_by_hour.get(key)
         if pct is not None:
+            hours.append(cursor)
             pcts.append(pct)
         cursor += timedelta(hours=1)
-    return pcts
+    return hours, pcts
+
+
+def _julian_date(dt_utc):
+    y, m = dt_utc.year, dt_utc.month
+    if m <= 2:
+        y -= 1
+        m += 12
+    a = y // 100
+    b = 2 - a + a // 4
+    day = dt_utc.day + (dt_utc.hour + dt_utc.minute / 60) / 24
+    return int(365.25 * (y + 4716)) + int(30.6001 * (m + 1)) + day + b - 1524.5
+
+
+def _moon_geometry(dt_utc):
+    """Geocentric moon altitude (deg) at (LAT, LON) and illuminated fraction (0..1).
+    Low-precision Meeus (chapters 47/48) — accuracy ~0.1° altitude, ~1% illum."""
+    jd = _julian_date(dt_utc)
+    T = (jd - 2451545.0) / 36525.0
+    d2r = math.pi / 180
+
+    Lp = (218.3164477 + 481267.88123421 * T) % 360
+    D  = (297.8501921 + 445267.1114034  * T) % 360
+    M  = (357.5291092 + 35999.0502909   * T) % 360
+    Mp = (134.9633964 + 477198.8675055  * T) % 360
+    F  = (93.2720950  + 483202.0175233  * T) % 360
+
+    lam = (Lp + 6.289 * math.sin(d2r * Mp)
+              - 1.274 * math.sin(d2r * (2 * D - Mp))
+              + 0.658 * math.sin(d2r * 2 * D)
+              - 0.214 * math.sin(d2r * 2 * Mp)
+              - 0.186 * math.sin(d2r * M)
+              - 0.114 * math.sin(d2r * 2 * F))
+    bet = (5.128 * math.sin(d2r * F)
+              + 0.281 * math.sin(d2r * (Mp + F))
+              - 0.278 * math.sin(d2r * (F - Mp))
+              - 0.173 * math.sin(d2r * (2 * D - F)))
+
+    eps = 23.4393 - 0.0130042 * T
+    lam_r, bet_r, eps_r = d2r * lam, d2r * bet, d2r * eps
+    sin_dec = (math.sin(bet_r) * math.cos(eps_r)
+               + math.cos(bet_r) * math.sin(eps_r) * math.sin(lam_r))
+    dec = math.asin(max(-1.0, min(1.0, sin_dec)))
+    ra = math.atan2(
+        math.sin(lam_r) * math.cos(eps_r) - math.tan(bet_r) * math.sin(eps_r),
+        math.cos(lam_r),
+    )
+
+    gmst = (280.46061837
+            + 360.98564736629 * (jd - 2451545.0)
+            + 0.000387933 * T * T
+            - T * T * T / 38710000.0) % 360
+    lst = d2r * ((gmst + LON) % 360)
+    H = lst - ra
+    phi = d2r * LAT
+    sin_alt = math.sin(phi) * math.sin(dec) + math.cos(phi) * math.cos(dec) * math.cos(H)
+    alt = math.degrees(math.asin(max(-1.0, min(1.0, sin_alt))))
+
+    # Phase angle (Meeus 48.4) — degrees
+    i = (180 - D
+         - 6.289 * math.sin(d2r * Mp)
+         + 2.100 * math.sin(d2r * M)
+         - 1.274 * math.sin(d2r * (2 * D - Mp))
+         - 0.658 * math.sin(d2r * 2 * D)
+         - 0.214 * math.sin(d2r * 2 * Mp)
+         - 0.110 * math.sin(d2r * D))
+    illum = (1 + math.cos(d2r * i)) / 2
+
+    return alt, illum
+
+
+def moon_for_night(hours_local, utc_offset_sec):
+    """Return (avg_pct, bar). Mirrors cloud_bar: per-hour blocks, height = illum%,
+    color = cloud_color (high illum = bad for observing); below-horizon hours show
+    a gray '·'. Inner state machine never emits RESET, so outer DIM wrapping for
+    past nights composes correctly."""
+    blocks = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
+    parts = []
+    last_color = None
+    contribs = []
+    for h in hours_local:
+        alt, illum = _moon_geometry(h - timedelta(seconds=utc_offset_sec))
+        if alt <= 0:
+            color, ch = GRAY, "·"
+            contribs.append(0.0)
+        else:
+            pct = illum * 100
+            contribs.append(pct)
+            color = cloud_color(pct)
+            ch = blocks[min(7, int(pct / 100 * 8))]
+        if color != last_color:
+            parts.append(color)
+            last_color = color
+        parts.append(ch)
+    if last_color is not None:
+        parts.append(RESET)
+    avg = sum(contribs) / len(contribs) if contribs else 0.0
+    return avg, "".join(parts)
 
 
 def main():
@@ -97,6 +204,9 @@ def main():
     tz = data.get("timezone_abbreviation") or data.get("timezone", "")
     lat = data.get("latitude", "")
     lon = data.get("longitude", "")
+    # Constant per response — fine for the 16-day window; would need per-hour
+    # resolution if the horizon ever crossed a DST transition.
+    utc_offset = data.get("utc_offset_seconds", 0)
 
     daily_dates = data["daily"]["time"]
     sunrises = data["daily"]["sunrise"]
@@ -112,9 +222,10 @@ def main():
             continue
         sunset = datetime.fromisoformat(sunset_str)
         sunrise = datetime.fromisoformat(sunrise_str)
-        pcts = collect_night(sunset, sunrise, cc_by_hour)
+        hours, pcts = collect_night(sunset, sunrise, cc_by_hour)
         if not pcts:
             continue
+        moon_avg, moon_bar_s = moon_for_night(hours, utc_offset)
         nights.append({
             "date": datetime.fromisoformat(daily_dates[i]).date(),
             "sunset": sunset,
@@ -123,6 +234,8 @@ def main():
             "avg": sum(pcts) / len(pcts),
             "min": min(pcts),
             "max": max(pcts),
+            "moon_avg": moon_avg,
+            "moon_bar": moon_bar_s,
         })
 
     today = datetime.now().date()
@@ -133,7 +246,7 @@ def main():
     print()
     print(f"  {title}   {meta}")
     print(f"  {DIM}{'─' * 82}{RESET}")
-    print(f"  {DIM}               set →rise   avg   hourly cloud cover →{RESET}")
+    print(f"  {DIM}               set →rise   cld   cloud cover →           moon  lit when up →{RESET}")
 
     for n in nights:
         d = n["date"]
@@ -149,6 +262,8 @@ def main():
 
         bar = cloud_bar(n["pcts"])
         avg_s = f"{cloud_color(n['avg'])}{n['avg']:>3.0f}%{RESET}"
+        m_avg_s = f"{cloud_color(n['moon_avg'])}{n['moon_avg']:>3.0f}%{RESET}"
+        m_bar = n["moon_bar"]
         set_s = n["sunset"].strftime("%H:%M")
         rise_s = n["sunrise"].strftime("%H:%M")
         times = f"{DIM}{set_s}→{rise_s}{RESET}"
@@ -156,8 +271,10 @@ def main():
         if is_past:
             avg_s = f"{DIM}{n['avg']:>3.0f}%{RESET}"
             bar = f"{DIM}{bar}{RESET}"
+            m_avg_s = f"{DIM}{n['moon_avg']:>3.0f}%{RESET}"
+            m_bar = f"{DIM}{m_bar}{RESET}"
 
-        print(f"  {label}  {times}  {avg_s}  {bar}")
+        print(f"  {label}  {times}  {avg_s}  {bar}   {m_avg_s}  {m_bar}")
 
     future = [n for n in nights if n["date"] >= today]
     best = sorted(future, key=lambda n: n["avg"])[:5]
